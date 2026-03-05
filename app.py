@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
 # ================= AUTO-INSTALL BS4 =================
@@ -21,13 +21,12 @@ from openai import OpenAI
 st.set_page_config(page_title="AI Trading Terminal", layout="wide")
 st.title("📊 AI Trading Terminal")
 
-# ================= DISPLAY NEW YORK OPEN IN LOCAL TIME =================
+# ================= TIME ZONE SETTINGS =================
 ny_tz = pytz.timezone("America/New_York")
-local_tz = pytz.timezone("Africa/Johannesburg")  # change if your local TZ is different
+local_tz = pytz.timezone("Africa/Johannesburg")  # adjust as needed
 
 ny_open = ny_tz.localize(datetime.combine(datetime.today(), datetime.strptime("09:30", "%H:%M").time()))
 ny_open_local = ny_open.astimezone(local_tz)
-
 st.info(f"🕘 New York Open: 09:30 ET → {ny_open_local.strftime('%H:%M %p')} Local Time")
 
 # ================= SIDEBAR =================
@@ -42,18 +41,25 @@ with st.sidebar:
 
     xai_key = user_key if user_key else secret_key
 
-    st.caption(
-        "For security: Never share your key. "
-        "On Streamlit Cloud, add it via Secrets instead of typing here."
-    )
+    st.caption("For security: Never share your key. Add it via Streamlit Secrets.")
 
     st.markdown("---")
-
     st.header("Market Selection")
     market_type = st.radio("Select Market Type", ["Crypto", "Forex", "US30"])
 
     st.markdown("---")
+    st.header("Backtesting Date")
+    today = datetime.today()
+    one_year_ago = today - timedelta(days=365)
+    
+    selected_date = st.date_input(
+        "Select Date for Historical Analysis",
+        value=today,
+        min_value=one_year_ago,
+        max_value=today
+    )
 
+    st.markdown("---")
     st.header("Tools")
     scan_crypto = st.button("🔎 Scan Crypto Market")
     scan_forex = st.button("🔎 Scan Forex Market")
@@ -91,7 +97,7 @@ if market_type == "US30" or scan_us30:
         response = requests.get(url)
         soup = BeautifulSoup(response.text, "html.parser")
         headlines = [h.text.strip() for h in soup.select("a.Card-title")]
-        us30_headlines = headlines[:10]  # Top 10 headlines
+        us30_headlines = headlines[:10]
         for h in us30_headlines:
             st.markdown(f"- {h}")
     except Exception as e:
@@ -112,7 +118,10 @@ tv_symbol_map = {
     "US30": "INDEX:US30",
 }
 
-tv_symbol = tv_symbol_map.get(symbol_clean, "INDEX:US30")  # default to US30
+tv_symbol = tv_symbol_map.get(symbol_clean, "INDEX:US30")
+
+# Convert selected date to string format TradingView can use (YYYY-MM-DD)
+date_str = selected_date.strftime("%Y-%m-%d")
 
 st.components.v1.html(f"""
 <div class="tradingview-widget-container">
@@ -124,6 +133,8 @@ st.components.v1.html(f"""
     "height": 500,
     "symbol": "{tv_symbol}",
     "interval": "60",
+    "range": "1D",
+    "date": "{date_str}",
     "timezone": "Etc/UTC",
     "theme": "light",
     "style": "1",
@@ -148,7 +159,7 @@ with col3:
     st.metric("Liquidity Pools", "Scanning...")
 
 # ================= AI ANALYSIS =================
-def run_ai_analysis(symbol, market_type, headlines):
+def run_ai_analysis(symbol, market_type, headlines, selected_date):
     if not xai_key:
         st.error("Please enter your xAI API Key in the sidebar.")
         return
@@ -159,9 +170,9 @@ def run_ai_analysis(symbol, market_type, headlines):
         prompt = f"""
 You are a professional institutional trader.
 
-Analyze the market: {symbol} ({market_type}).
+Analyze the market: {symbol} ({market_type}) for date {selected_date.strftime('%Y-%m-%d')}.
 
-Predict likely market movement by the **start of the New York session ({ny_open_local.strftime('%H:%M %p')} local time)** today.
+Predict likely market movement by the **start of the New York session ({ny_open_local.strftime('%H:%M %p')} local time)**.
 
 """
         if market_type == "US30" and headlines:
@@ -187,16 +198,16 @@ Return clear structured analysis.
                 {"role": "user", "content": prompt},
             ],
         )
-        st.subheader("🧠 AI Market Analysis (New York Session Prediction)")
+        st.subheader(f"🧠 AI Market Analysis for {selected_date.strftime('%Y-%m-%d')}")
         st.markdown(response.choices[0].message.content)
 
-# Automatically run AI analysis for US30 when selected
+# Run AI analysis automatically for US30
 if market_type == "US30":
-    run_ai_analysis(symbol, market_type, us30_headlines)
+    run_ai_analysis(symbol, market_type, us30_headlines, selected_date)
 
-# Also run manually via button for any symbol
+# Run manually via button
 if st.button("🤖 Run AI Market Analysis"):
-    run_ai_analysis(symbol, market_type, us30_headlines)
+    run_ai_analysis(symbol, market_type, us30_headlines, selected_date)
 
 # ================= PRICE SCENARIOS =================
 st.subheader("📉 AI Scenario Projection")
