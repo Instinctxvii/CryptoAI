@@ -22,98 +22,170 @@ with st.sidebar:
     market_type = st.radio("Select Market Type", ["Forex", "US30"])
     
     st.markdown("---")
-    st.header("Backtesting Date")
+    st.header("Backtesting Date (not yet active)")
     today = datetime.today()
     one_year_ago = today - timedelta(days=365)
-    selected_date = st.date_input("Select Date for Backtesting", value=today, min_value=one_year_ago, max_value=today)
+    selected_date = st.date_input("Select Date for Backtesting", value=today, 
+                                 min_value=one_year_ago, max_value=today)
 
 # ================= SYMBOL INPUT =================
-symbol_default = "EURUSD" if market_type=="Forex" else "US30"
+symbol_default = "EURUSD" if market_type == "Forex" else "US30"
 symbol = st.text_input("Enter Symbol", symbol_default)
 
-# ================= AI ANALYSIS (SIMULATED) =================
-support_resistance = []
-trend_bias = ""
-liquidity = 0
+# ================= CURRENT PRICE INPUT (key fix) =================
+st.subheader("Current Market Price (from TradingView)")
+if market_type == "US30":
+    default_price = 48622.0
+    step = 10.0
+else:
+    default_price = 1.0820
+    step = 0.0001
 
-def run_ai_analysis():
-    global support_resistance, trend_bias, liquidity
-    if market_type=="US30":
-        support_resistance = [39000,39500,40000]
-        trend_bias = "Bullish"
-        liquidity = 39500
-    else:
-        support_resistance = [1.08,1.082,1.085]
-        trend_bias = "Neutral"
-        liquidity = 1.082
+current_price = st.number_input(
+    "Paste/enter the current or last visible price from the chart",
+    min_value=0.0,
+    value=default_price,
+    step=step,
+    format="%.4f" if market_type == "Forex" else "%.0f"
+)
 
-    st.subheader(f"🧠 AI Market Analysis for {symbol}")
-    st.markdown(f"""
-**Support Levels:** {support_resistance[:2]}  
-**Resistance Levels:** {support_resistance[2:]}  
-**Trend Bias:** {trend_bias}  
-**Liquidity Pools:** Around {liquidity}  
-""")
+# ================= AI ANALYSIS =================
+support_levels = []
+resistance_levels = []
+trend_bias = "Neutral"
+liquidity_pool = None
 
 if st.button("🤖 Run AI Market Analysis"):
-    run_ai_analysis()
+    # Generate realistic levels based on current price
+    if market_type == "US30":
+        # Round to nice psychological levels
+        base = round(current_price / 100) * 100
+        
+        support_levels = [
+            round(base - 400),   # strong support
+            round(base - 200)    # near support / liquidity
+        ]
+        resistance_levels = [
+            round(base + 200),   # near resistance
+            round(base + 400)    # strong resistance
+        ]
+        liquidity_pool = round(base - 180)  # typical stop/liquidity grab area below
+        trend_bias = "Neutral"  # you can later add logic based on price action
+        
+    else:  # Forex (e.g. EURUSD, GBPUSD, etc.)
+        base = round(current_price * 10000) / 10000  # 4 decimal places
+        
+        support_levels = [
+            round(base - 0.0040, 4),
+            round(base - 0.0020, 4)
+        ]
+        resistance_levels = [
+            round(base + 0.0020, 4),
+            round(base + 0.0040, 4)
+        ]
+        liquidity_pool = round(base - 0.0015, 4)
+        trend_bias = "Neutral"
+
+    # Display AI analysis
+    st.subheader(f"🧠 AI Market Analysis for {symbol}")
+    st.markdown(f"""
+**Support Levels:** {support_levels}  
+**Resistance Levels:** {resistance_levels}  
+**Trend Bias:** {trend_bias}  
+**Liquidity Pools:** Around {liquidity_pool}  
+    """)
+
+# Combine all levels for overlays
+all_ai_levels = support_levels + resistance_levels
+if liquidity_pool is not None:
+    all_ai_levels.append(liquidity_pool)
 
 # ================= TRADINGVIEW WIDGET =================
 st.subheader("📈 Real-Time TradingView Chart")
-symbol_clean = symbol.upper().replace(" ","")
-tv_symbol_map = {
-    "EURUSD":"FX_IDC:EURUSD",
-    "US30":"PEPPERSTONE:US30"  # default Pepperstone US30 CFD
-}
-tv_symbol = tv_symbol_map.get(symbol_clean,"INDEX:US30")
 
-overlays_json = [{"price":lvl,"color":"red","width":1} for lvl in support_resistance]
-overlays_js = json.dumps(overlays_json)
+symbol_clean = symbol.upper().replace(" ", "")
+tv_symbol_map = {
+    "EURUSD": "FX:EURUSD",
+    "GBPUSD": "FX:GBPUSD",
+    "US30": "PEPPERSTONE:US30CFD",  # or AMP:US30, OANDA:US30USD, etc.
+    "DJI": "INDEX:DJI",
+    "SPX": "INDEX:SPX"
+}
+tv_symbol = tv_symbol_map.get(symbol_clean, "PEPPERSTONE:US30CFD")
+
+# Prepare overlays (red for S/R, green for liquidity)
+overlays = []
+for lvl in support_levels + resistance_levels:
+    overlays.append({"price": lvl, "color": "red", "width": 1})
+if liquidity_pool is not None:
+    overlays.append({"price": liquidity_pool, "color": "green", "width": 2, "linestyle": "dashed"})
+
+overlays_json = json.dumps(overlays)
 
 st.components.v1.html(f"""
 <div class="tradingview-widget-container">
   <div id="tradingview_{symbol_clean}"></div>
   <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
   <script type="text/javascript">
-    const overlays = {overlays_js};
-    const widget = new TradingView.widget({{
-        "width":"100%",
-        "height":500,
-        "symbol":"{tv_symbol}",
-        "interval":"1",
-        "timezone":"Etc/UTC",
-        "theme":"light",
-        "style":"1",
-        "locale":"en",
-        "toolbar_bg":"#f1f3f6",
-        "enable_publishing":false,
-        "allow_symbol_change":true,
-        "container_id":"tradingview_{symbol_clean}"
+    const overlays = {overlays_json};
+    new TradingView.widget({{
+      "width": "100%",
+      "height": 550,
+      "symbol": "{tv_symbol}",
+      "interval": "5",
+      "timezone": "Etc/UTC",
+      "theme": "dark",
+      "style": "1",
+      "locale": "en",
+      "toolbar_bg": "#f1f3f6",
+      "enable_publishing": false,
+      "allow_symbol_change": true,
+      "container_id": "tradingview_{symbol_clean}"
     }});
-    overlays.forEach(l=>console.log("AI Zone Price:",l.price));
+    // Optional: log levels for debugging
+    overlays.forEach(l => console.log("AI Level drawn at:", l.price));
   </script>
 </div>
-""", height=520)
+""", height=580)
 
 # ================= PLOTLY CHART WITH AI LEVELS =================
-st.subheader("📊 AI Support / Resistance Overlay")
-# simulate live price data for visualization
-if market_type=="US30":
-    prices = [39000,39200,39100,39300,39500,39400]
+st.subheader("📊 Price Simulation with AI Levels")
+
+# Very simple simulated recent prices (centered around current_price)
+if market_type == "US30":
+    base_prices = [current_price - 300, current_price - 150, current_price, 
+                   current_price + 100, current_price + 250, current_price]
 else:
-    prices = [1.08,1.081,1.079,1.082,1.084,1.083]
-times = pd.date_range(end=datetime.now(), periods=len(prices), freq="1min")
-df = pd.DataFrame({"Time":times,"Price":prices})
+    base_prices = [current_price - 0.003, current_price - 0.0015, current_price, 
+                   current_price + 0.001, current_price + 0.0025, current_price]
+
+times = pd.date_range(end=datetime.now(pytz.UTC), periods=6, freq="5min")
+df = pd.DataFrame({"Time": times, "Price": base_prices})
 
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=df["Time"], y=df["Price"], mode="lines+markers", name="Price"))
+fig.add_trace(go.Scatter(x=df["Time"], y=df["Price"], 
+                        mode="lines+markers", name="Price", line=dict(color="#00ccff")))
 
-# AI levels
-for lvl in support_resistance:
-    fig.add_hline(y=lvl, line_dash="dash", line_color="red", annotation_text=f"AI Level: {lvl}")
+# Add AI levels
+for lvl in support_levels:
+    fig.add_hline(y=lvl, line_dash="dash", line_color="orange", 
+                  annotation_text=f"Support {lvl}", annotation_position="right")
+for lvl in resistance_levels:
+    fig.add_hline(y=lvl, line_dash="dash", line_color="red", 
+                  annotation_text=f"Resistance {lvl}", annotation_position="right")
+if liquidity_pool is not None:
+    fig.add_hline(y=liquidity_pool, line_dash="dot", line_color="lime", 
+                  line_width=2, annotation_text=f"Liquidity \~{liquidity_pool}", 
+                  annotation_position="left")
 
-# liquidity pool
-fig.add_hline(y=liquidity, line_color="green", line_dash="dot", annotation_text="Liquidity Pool")
-
-fig.update_layout(height=500, xaxis_title="Time", yaxis_title="Price")
+fig.update_layout(
+    height=500,
+    xaxis_title="Time (UTC)",
+    yaxis_title="Price",
+    template="plotly_dark",
+    hovermode="x unified"
+)
 st.plotly_chart(fig, use_container_width=True)
+
+st.markdown("---")
+st.caption("Tip: Paste the exact price you see in TradingView into the number input above, then click 'Run AI Market Analysis' to update levels and overlays.")
