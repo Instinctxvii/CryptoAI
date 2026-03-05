@@ -73,14 +73,14 @@ if scan_forex:
 
 # ================= US30 NEWS =================
 us30_headlines = []
-if scan_us30:
+if market_type == "US30" or scan_us30:
     st.subheader("📰 US30 Latest Headlines from CNBC")
     url = "https://www.cnbc.com/us-stocks/"
     try:
         response = requests.get(url)
         soup = BeautifulSoup(response.text, "html.parser")
         headlines = [h.text.strip() for h in soup.select("a.Card-title")]
-        us30_headlines = headlines[:10]  # Top 10
+        us30_headlines = headlines[:10]  # Top 10 headlines
         for h in us30_headlines:
             st.markdown(f"- {h}")
     except Exception as e:
@@ -134,22 +134,26 @@ with col3:
     st.metric("Liquidity Pools", "Scanning...")
 
 # ================= AI ANALYSIS =================
-if st.button("🤖 Run AI Market Analysis"):
+def run_ai_analysis(symbol, market_type, headlines):
     if not xai_key:
         st.error("Please enter your xAI API Key in the sidebar.")
-    else:
-        with st.spinner("Running AI market analysis..."):
-            client = OpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
-            prompt = f"""
+        return
+
+    with st.spinner("Running AI market analysis..."):
+        client = OpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
+        
+        prompt = f"""
 You are a professional institutional trader.
 
 Analyze the market: {symbol} ({market_type}).
 
-"""
-            if market_type == "US30" and us30_headlines:
-                prompt += f"Recent CNBC headlines:\n{us30_headlines}\n"
+Predict likely market movement by the **start of the New York session** today.
 
-            prompt += """
+"""
+        if market_type == "US30" and headlines:
+            prompt += f"Recent CNBC headlines:\n{headlines}\n"
+
+        prompt += """
 Provide:
 1. Market structure
 2. Support and resistance zones
@@ -161,15 +165,24 @@ Provide:
 
 Return clear structured analysis.
 """
-            response = client.chat.completions.create(
-                model="grok-4-1-fast-reasoning",
-                messages=[
-                    {"role": "system", "content": "You are a professional institutional trader."},
-                    {"role": "user", "content": prompt},
-                ],
-            )
-            st.subheader("🧠 AI Market Analysis")
-            st.markdown(response.choices[0].message.content)
+
+        response = client.chat.completions.create(
+            model="grok-4-1-fast-reasoning",
+            messages=[
+                {"role": "system", "content": "You are a professional institutional trader."},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        st.subheader("🧠 AI Market Analysis (New York Session Prediction)")
+        st.markdown(response.choices[0].message.content)
+
+# Automatically run AI analysis for US30 when selected
+if market_type == "US30":
+    run_ai_analysis(symbol, market_type, us30_headlines)
+
+# Also run manually via button for any symbol
+if st.button("🤖 Run AI Market Analysis"):
+    run_ai_analysis(symbol, market_type, us30_headlines)
 
 # ================= PRICE SCENARIOS =================
 st.subheader("📉 AI Scenario Projection")
