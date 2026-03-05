@@ -92,17 +92,23 @@ symbol = st.text_input("Enter Symbol", symbol_default)
 
 # ================= TRADINGVIEW CHART =================
 st.subheader("📈 Market Chart (TradingView)")
-symbol_map = {
-    "bitcoin": "COINBASE:BTCUSD",
-    "ethereum": "COINBASE:ETHUSD",
-    "EURUSD": "FX_IDC:EURUSD",
-    "US30": "INDEX:US30"
-}
-tv_symbol = symbol_map.get(symbol.upper(), "COINBASE:BTCUSD")
 
+# ---- Normalize US30 input for TradingView ----
+symbol_clean = symbol.upper().replace(" ", "")
+# Mapping for popular symbols
+tv_symbol_map = {
+    "BITCOIN": "COINBASE:BTCUSD",
+    "ETHEREUM": "COINBASE:ETHUSD",
+    "EURUSD": "FX_IDC:EURUSD",
+    "US30": "INDEX:US30",
+}
+
+tv_symbol = tv_symbol_map.get(symbol_clean, "INDEX:US30")  # default to US30
+
+# ---- Render TradingView Widget ----
 st.components.v1.html(f"""
 <div class="tradingview-widget-container">
-  <div id="tradingview_{symbol}"></div>
+  <div id="tradingview_{symbol_clean}"></div>
   <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
   <script type="text/javascript">
   new TradingView.widget({{
@@ -117,7 +123,7 @@ st.components.v1.html(f"""
     "toolbar_bg": "#f1f3f6",
     "enable_publishing": false,
     "allow_symbol_change": true,
-    "container_id": "tradingview_{symbol}"
+    "container_id": "tradingview_{symbol_clean}"
   }});
   </script>
 </div>
