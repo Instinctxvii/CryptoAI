@@ -4,17 +4,28 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import pytz
 import json
+import yfinance as yf
 
 # ================= PAGE CONFIG =================
 st.set_page_config(page_title="AI Trading Terminal", layout="wide")
-st.title("📊 AI Trading Terminal (Live + AI Zones)")
+st.title("📊 AI Trading Terminal (Live AI Trader + TP/SL)")
 
-# ================= TIME =================
-ny_tz = pytz.timezone("America/New_York")
-local_tz = pytz.timezone("Africa/Johannesburg")
-ny_open = ny_tz.localize(datetime.combine(datetime.today(), datetime.strptime("09:30","%H:%M").time()))
-ny_open_local = ny_open.astimezone(local_tz)
-st.info(f"🕘 New York Open: 09:30 ET → {ny_open_local.strftime('%H:%M %p')} Local Time")
+# ================= SESSION STATE =================
+if 'support_levels' not in st.session_state:
+    st.session_state.update({
+        'support_levels': [],
+        'resistance_levels': [],
+        'liquidity_pool': None,
+        'prediction': "",
+        'bias': "Neutral",
+        'fetched_price': 0.0,
+        'yf_ticker': "",
+        'atr': 0.0,
+        'entry_suggestion': "",
+        'sl': None,
+        'tp1': None,
+        'tp2': None
+    })
 
 # ================= SIDEBAR =================
 with st.sidebar:
@@ -22,99 +33,172 @@ with st.sidebar:
     market_type = st.radio("Select Market Type", ["Forex", "US30"])
     
     st.markdown("---")
-    st.header("Backtesting Date (not yet active)")
+    st.header("Risk Management")
+    rr_ratio = st.slider("Preferred Risk:Reward Ratio", 1.0, 3.0, 2.0, step=0.5)
+    risk_percent = st.number_input("Risk % per trade", 0.5, 5.0, 1.0, step=0.5) / 100
+    
+    st.markdown("---")
+    st.header("Backtesting Date (not active yet)")
     today = datetime.today()
     one_year_ago = today - timedelta(days=365)
-    selected_date = st.date_input("Select Date for Backtesting", value=today, 
-                                 min_value=one_year_ago, max_value=today)
+    selected_date = st.date_input("Select Date", value=today, min_value=one_year_ago, max_value=today)
 
-# ================= SYMBOL INPUT =================
+# ================= SYMBOL & TV SYMBOL =================
 symbol_default = "EURUSD" if market_type == "Forex" else "US30"
 symbol = st.text_input("Enter Symbol", symbol_default)
 
-# ================= CURRENT PRICE INPUT =================
-st.subheader("Current Market Price (from TradingView)")
-if market_type == "US30":
-    default_price = 48600.0  # update this to whatever you see today
-    step = 10.0
-    price_format = "%.0f"
+st.subheader("TradingView Symbol")
+default_tv = "FX:US30" if market_type == "US30" else f"FX:{symbol.upper()}"
+tv_symbol = st.text_input("TradingView symbol", value=default_tv)
+
+# ================= RSI HELPER =================
+def calculate_rsi(series, period=14):
+    if len(series) < period + 1:
+        return 50.0
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.iloc[-1]
+
+# ================= FETCH & AI ANALYSIS =================
+if st.button("🤖 Fetch Live Data & Run AI Trader Analysis"):
+    with st.spinner("Analyzing like a pro trader..."):
+        yf_ticker = "^DJI" if market_type == "US30" else f"{symbol.upper()}=X"
+        
+        try:
+            hist = yf.download(yf_ticker, period="7d", interval="15m", progress=False)
+            if hist.empty or len(hist) < 30:
+                st.error("Insufficient data. Try again later.")
+            else:
+                current_price = round(hist['Close'].iloc[-1], 0 if market_type == "US30" else 4)
+                recent_high = hist['High'].max()
+                recent_low = hist['Low'].min()
+                atr = (hist['High'] - hist['Low']).rolling(14).mean().iloc[-1]  # better ATR
+                prec = 0 if market_type == "US30" else 4
+                
+                support_levels = sorted([
+                    round(recent_low, prec),
+                    round(recent_low + atr * 0.5, prec)
+                ])
+                resistance_levels = sorted([
+                    round(recent_high - atr * 0.5, prec),
+                    round(recent_high, prec)
+                ])
+                liquidity_pool = round(recent_low - atr * 0.6, prec)
+                
+                rsi = calculate_rsi(hist['Close'])
+                sma20 = hist['Close'].rolling(20).mean().iloc[-1]
+                
+                # Trader logic + TP/SL
+                if current_price > sma20 and rsi < 70:
+                    bias = "Bullish"
+                    direction = "LONG"
+                    entry = current_price if current_price < support_levels[1] else support_levels[1]  # pullback entry
+                    sl = round(min(support_levels[0], entry - atr * 1.2), prec)
+                    risk = abs(entry - sl)
+                    tp1 = round(entry + risk * 1.0, prec)
+                    tp2 = round(entry + risk * rr_ratio, prec)
+                    entry_suggestion = f"**LONG** on pullback to \~{entry:.{prec}f} or current level if holding."
+                    prediction = (f"📈 Bullish – above SMA20, RSI healthy. "
+                                  f"Target TP1 {tp1}, TP2 {tp2}. "
+                                  f"Strong break above {resistance_levels[1]} confirms continuation.")
+                
+                elif current_price < sma20 and rsi > 30:
+                    bias = "Bearish"
+                    direction = "SHORT"
+                    entry = current_price if current_price > resistance_levels[0] else resistance_levels[0]
+                    sl = round(max(resistance_levels[1], entry + atr * 1.2), prec)
+                    risk = abs(sl - entry)
+                    tp1 = round(entry - risk * 1.0, prec)
+                    tp2 = round(entry - risk * rr_ratio, prec)
+                    entry_suggestion = f"**SHORT** on rally to \~{entry:.{prec}f} or current if breaking down."
+                    prediction = (f"📉 Bearish – below key average. "
+                                  f"Target TP1 {tp1}, TP2 {tp2}. "
+                                  f"Break below {support_levels[0]} accelerates downside.")
+                
+                else:
+                    bias = "Neutral"
+                    direction = "Range / Wait"
+                    entry_suggestion = "No clear edge – wait for breakout or stronger signal."
+                    sl = tp1 = tp2 = None
+                    prediction = (f"⚖️ Range-bound. Watch breakout above {resistance_levels[1]} "
+                                  f"or below {support_levels[0]} for directional move.")
+                
+                # Save everything
+                st.session_state.update({
+                    'support_levels': support_levels,
+                    'resistance_levels': resistance_levels,
+                    'liquidity_pool': liquidity_pool,
+                    'prediction': prediction,
+                    'bias': bias,
+                    'fetched_price': current_price,
+                    'yf_ticker': yf_ticker,
+                    'atr': atr,
+                    'entry_suggestion': entry_suggestion,
+                    'sl': sl,
+                    'tp1': tp1,
+                    'tp2': tp2
+                })
+                
+                st.success(f"Data fetched ({yf_ticker}) → Price: **{current_price}** | Bias: **{bias}**")
+
+        except Exception as e:
+            st.error(f"Fetch failed: {e}")
+
+# ================= DISPLAY AI ANALYSIS =================
+st.subheader("🧠 AI Pro Trader Analysis")
+
+if st.session_state.support_levels:
+    col1, col2 = st.columns([3, 2])
+    
+    with col1:
+        st.markdown(f"""
+**Current Price (live fetch):** {st.session_state.fetched_price}
+
+**Support Levels:** {st.session_state.support_levels}  
+**Resistance Levels:** {st.session_state.resistance_levels}  
+**Liquidity Pool:** \~{st.session_state.liquidity_pool}
+
+**Trend Bias:** **{st.session_state.bias}**
+
+**Entry Suggestion:**  
+{st.session_state.entry_suggestion}
+
+**Stop Loss (SL):** {st.session_state.sl if st.session_state.sl else 'N/A (wait for bias)'}  
+**Take Profit 1 (1:1 RR):** {st.session_state.tp1 if st.session_state.tp1 else 'N/A'}  
+**Take Profit 2 ({rr_ratio}:1 RR):** {st.session_state.tp2 if st.session_state.tp2 else 'N/A'}
+
+**AI Trader Prediction:**  
+{st.session_state.prediction}
+        """)
+    
+    with col2:
+        st.caption(f"Last fetch: {st.session_state.yf_ticker} • ATR ≈ {st.session_state.atr:.1f if market_type=='US30' else st.session_state.atr:.4f}")
+        st.info("Adjust RR in sidebar to see updated targets on next analysis.")
+
 else:
-    default_price = 1.0820
-    step = 0.0001
-    price_format = "%.4f"
-
-current_price = st.number_input(
-    "Paste/enter the current or last visible price from the chart",
-    min_value=0.0,
-    value=default_price,
-    step=step,
-    format=price_format
-)
-
-# ================= OVERRIDE TRADINGVIEW SYMBOL (very useful for debugging) =================
-st.subheader("TradingView Symbol (override if needed)")
-default_tv_symbol = "FX:US30" if market_type == "US30" else "FX:EURUSD"
-tv_symbol_override = st.text_input(
-    "TradingView symbol (e.g. FX:US30, OANDA:US30USD, TVC:DJI, FX:EURUSD)",
-    value=default_tv_symbol
-)
-
-# ================= AI ANALYSIS =================
-support_levels = []
-resistance_levels = []
-trend_bias = "Neutral"
-liquidity_pool = None
-
-if st.button("🤖 Run AI Market Analysis"):
-    if market_type == "US30":
-        base = round(current_price / 100) * 100
-        support_levels = [round(base - 400), round(base - 200)]
-        resistance_levels = [round(base + 200), round(base + 400)]
-        liquidity_pool = round(base - 180)
-    else:
-        base = round(current_price * 10000) / 10000
-        support_levels = [round(base - 0.0040, 4), round(base - 0.0020, 4)]
-        resistance_levels = [round(base + 0.0020, 4), round(base + 0.0040, 4)]
-        liquidity_pool = round(base - 0.0015, 4)
-
-    st.subheader(f"🧠 AI Market Analysis for {symbol}")
-    st.markdown(f"""
-**Support Levels:** {support_levels}  
-**Resistance Levels:** {resistance_levels}  
-**Trend Bias:** {trend_bias}  
-**Liquidity Pools:** Around {liquidity_pool}  
-    """)
-
-# Combine levels for overlays
-all_ai_levels = support_levels + resistance_levels
-if liquidity_pool is not None:
-    all_ai_levels.append(liquidity_pool)
+    st.info("Click the button above to get real-time analysis with TP/SL.")
 
 # ================= TRADINGVIEW WIDGET =================
-st.subheader("📈 Real-Time TradingView Chart")
+st.subheader("📈 TradingView Chart with AI Levels")
 
 symbol_clean = symbol.upper().replace(" ", "")
 
-# Use the override if provided, otherwise fallback logic
-if tv_symbol_override.strip():
-    tv_symbol = tv_symbol_override.strip()
-else:
-    tv_symbol_map = {
-        "EURUSD": "FX:EURUSD",
-        "GBPUSD": "FX:GBPUSD",
-        "USDZAR": "FX:USDZAR",
-        "US30": "FX:US30",           # most reliable public one
-        "DJI": "TVC:DJI",
-        "DOW": "TVC:DJI"
-    }
-    tv_symbol = tv_symbol_map.get(symbol_clean, "FX:US30" if market_type == "US30" else "FX:EURUSD")
-
-# Prepare overlays
 overlays = []
-for lvl in support_levels + resistance_levels:
-    overlays.append({"price": float(lvl), "color": "red", "width": 1})
-if liquidity_pool is not None:
-    overlays.append({"price": float(liquidity_pool), "color": "lime", "width": 2, "linestyle": "dashed"})
+for lvl in st.session_state.support_levels:
+    overlays.append({"price": float(lvl), "color": "orange", "width": 2})
+for lvl in st.session_state.resistance_levels:
+    overlays.append({"price": float(lvl), "color": "red", "width": 2})
+if st.session_state.liquidity_pool:
+    overlays.append({"price": float(st.session_state.liquidity_pool), "color": "lime", "width": 3, "linestyle": "dashed"})
+if st.session_state.sl:
+    overlays.append({"price": float(st.session_state.sl), "color": "purple", "width": 2, "linestyle": "dotted"})
+if st.session_state.tp1:
+    overlays.append({"price": float(st.session_state.tp1), "color": "#00ff00", "width": 2})
+if st.session_state.tp2:
+    overlays.append({"price": float(st.session_state.tp2), "color": "#00cc00", "width": 3})
 
 overlays_json = json.dumps(overlays)
 
@@ -133,54 +217,48 @@ st.components.v1.html(f"""
       "theme": "dark",
       "style": "1",
       "locale": "en",
-      "toolbar_bg": "#f1f3f6",
       "enable_publishing": false,
       "allow_symbol_change": true,
       "container_id": "tradingview_{symbol_clean}"
     }});
-    console.log("Using symbol: {tv_symbol}");
-    overlays.forEach(l => console.log("AI Level:", l.price));
   </script>
 </div>
 """, height=580)
 
-# (rest of the code - Plotly chart remains unchanged)
+# ================= PLOTLY =================
+st.subheader("📊 Recent Price + AI Levels / TP/SL")
 
-st.subheader("📊 Price Simulation with AI Levels")
+if st.session_state.support_levels:
+    cp = st.session_state.fetched_price
+    scale = 300 if market_type == "US30" else 0.003
+    base_prices = [cp - scale*0.9, cp - scale*0.4, cp, cp + scale*0.3, cp + scale*0.7, cp]
 
-if market_type == "US30":
-    base_prices = [current_price - 300, current_price - 150, current_price, 
-                   current_price + 100, current_price + 250, current_price]
-else:
-    base_prices = [current_price - 0.003, current_price - 0.0015, current_price, 
-                   current_price + 0.001, current_price + 0.0025, current_price]
+    times = pd.date_range(end=datetime.now(pytz.UTC), periods=6, freq="15min")
+    df = pd.DataFrame({"Time": times, "Price": base_prices})
 
-times = pd.date_range(end=datetime.now(pytz.UTC), periods=6, freq="5min")
-df = pd.DataFrame({"Time": times, "Price": base_prices})
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df["Time"], y=df["Price"], mode="lines+markers", name="Price", line=dict(color="#00ccff")))
 
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=df["Time"], y=df["Price"], 
-                        mode="lines+markers", name="Price", line=dict(color="#00ccff")))
+    colors = {
+        'support': 'orange', 'resistance': 'red', 'liquidity': 'lime',
+        'sl': 'purple', 'tp1': '#00ff00', 'tp2': '#00cc00'
+    }
+    
+    for lvl, label in [
+        (st.session_state.support_levels, "Support"),
+        (st.session_state.resistance_levels, "Resistance"),
+        ([st.session_state.liquidity_pool], "Liquidity"),
+        ([st.session_state.sl], "SL"),
+        ([st.session_state.tp1], "TP1"),
+        ([st.session_state.tp2], "TP2")
+    ]:
+        for val in (lvl if isinstance(lvl, list) else [lvl]):
+            if val is not None:
+                fig.add_hline(y=val, line_dash="dash" if "TP" not in label and "SL" not in label else "dot",
+                              line_color=colors.get(label.lower().split()[0], 'gray'),
+                              annotation_text=f"{label} {val}", annotation_position="right")
 
-for lvl in support_levels:
-    fig.add_hline(y=lvl, line_dash="dash", line_color="orange", 
-                  annotation_text=f"Support {lvl}", annotation_position="right")
-for lvl in resistance_levels:
-    fig.add_hline(y=lvl, line_dash="dash", line_color="red", 
-                  annotation_text=f"Resistance {lvl}", annotation_position="right")
-if liquidity_pool is not None:
-    fig.add_hline(y=liquidity_pool, line_dash="dot", line_color="lime", 
-                  line_width=2, annotation_text=f"Liquidity \~{liquidity_pool}", 
-                  annotation_position="left")
+    fig.update_layout(height=500, template="plotly_dark", hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True)
 
-fig.update_layout(
-    height=500,
-    xaxis_title="Time (UTC)",
-    yaxis_title="Price",
-    template="plotly_dark",
-    hovermode="x unified"
-)
-st.plotly_chart(fig, use_container_width=True)
-
-st.markdown("---")
-st.caption("Tip: If chart still fails → paste one of these into the override field: FX:US30, OANDA:US30USD, TVC:DJI, BLACKBULL:US30")
+st.caption("TP/SL are dynamic based on ATR, bias, and your chosen RR. Always use proper position sizing!")
