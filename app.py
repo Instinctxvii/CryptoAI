@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import pytz
+import json
 
 # ================= PAGE CONFIG =================
 st.set_page_config(page_title="AI Trading Terminal", layout="wide")
@@ -57,24 +58,61 @@ def run_ai_analysis():
 if st.button("🤖 Run AI Market Analysis"):
     run_ai_analysis()
 
-# ================= HISTORICAL / LIVE PRICE SIMULATION =================
-st.subheader("📈 Price Chart with AI Zones")
+# ================= TRADINGVIEW WIDGET =================
+st.subheader("📈 Real-Time TradingView Chart")
+symbol_clean = symbol.upper().replace(" ","")
+tv_symbol_map = {
+    "EURUSD":"FX_IDC:EURUSD",
+    "US30":"PEPPERSTONE:US30"  # default Pepperstone US30 CFD
+}
+tv_symbol = tv_symbol_map.get(symbol_clean,"INDEX:US30")
+
+overlays_json = [{"price":lvl,"color":"red","width":1} for lvl in support_resistance]
+overlays_js = json.dumps(overlays_json)
+
+st.components.v1.html(f"""
+<div class="tradingview-widget-container">
+  <div id="tradingview_{symbol_clean}"></div>
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <script type="text/javascript">
+    const overlays = {overlays_js};
+    const widget = new TradingView.widget({{
+        "width":"100%",
+        "height":500,
+        "symbol":"{tv_symbol}",
+        "interval":"1",
+        "timezone":"Etc/UTC",
+        "theme":"light",
+        "style":"1",
+        "locale":"en",
+        "toolbar_bg":"#f1f3f6",
+        "enable_publishing":false,
+        "allow_symbol_change":true,
+        "container_id":"tradingview_{symbol_clean}"
+    }});
+    overlays.forEach(l=>console.log("AI Zone Price:",l.price));
+  </script>
+</div>
+""", height=520)
+
+# ================= PLOTLY CHART WITH AI LEVELS =================
+st.subheader("📊 AI Support / Resistance Overlay")
+# simulate live price data for visualization
 if market_type=="US30":
-    prices = [39000,39200,39100,39300,39500,39400]  # simulate recent prices
+    prices = [39000,39200,39100,39300,39500,39400]
 else:
     prices = [1.08,1.081,1.079,1.082,1.084,1.083]
-
 times = pd.date_range(end=datetime.now(), periods=len(prices), freq="1min")
 df = pd.DataFrame({"Time":times,"Price":prices})
 
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=df["Time"], y=df["Price"], mode="lines+markers", name="Price"))
 
-# Add AI horizontal lines
+# AI levels
 for lvl in support_resistance:
     fig.add_hline(y=lvl, line_dash="dash", line_color="red", annotation_text=f"AI Level: {lvl}")
 
-# Add liquidity pool marker
+# liquidity pool
 fig.add_hline(y=liquidity, line_color="green", line_dash="dot", annotation_text="Liquidity Pool")
 
 fig.update_layout(height=500, xaxis_title="Time", yaxis_title="Price")
