@@ -26,7 +26,7 @@ with st.sidebar:
     rr = st.slider("Risk:Reward for TP2", 1.5, 4.0, 2.5, 0.5)
 
 # ────────────────────────────────────────────────
-# TRADINGVIEW CHART – loads immediately
+# TRADINGVIEW CHART – loads on startup
 # ────────────────────────────────────────────────
 st.subheader("📈 US30 Live Chart")
 
@@ -55,66 +55,64 @@ st.components.v1.html(f"""
 """, height=620)
 
 # ────────────────────────────────────────────────
-# ANALYSIS BUTTON – fully scalar-safe version
+# ANALYSIS BUTTON – fixed version with explicit entry point
 # ────────────────────────────────────────────────
 if st.button("Analyze Current Structure", type="primary"):
     with st.spinner("Fetching data..."):
         try:
             df = yf.download("^DJI", period="5d", interval="15m", progress=False)
 
-            # Early exit – safe check (df.empty is bool, len(df) is int)
-            if df is None or df.empty or len(df) < 20:
+            if df.empty or len(df) < 20:
                 st.error("Not enough recent data from Yahoo Finance")
                 st.stop()
 
-            # Keep only needed columns + force numeric
             df = df[['Close', 'High', 'Low']].astype(float)
 
-            # ── Extract ALL scalars first ─────────────────────────────────
+            # Scalars only – no Series in any condition
             current_price = float(df['Close'].iloc[-1])
             price_r = round(current_price)
 
-            # Rolling values → convert to float right away
-            high_40 = float(df['High'].rolling(window=40).max().iloc[-1])
-            low_40  = float(df['Low'].rolling(window=40).min().iloc[-1])
+            high_40 = float(df['High'].rolling(40).max().iloc[-1])
+            low_40  = float(df['Low'].rolling(40).min().iloc[-1])
 
-            atr = float((df['High'] - df['Low']).rolling(window=14).mean().iloc[-1])
+            atr = float((df['High'] - df['Low']).rolling(14).mean().iloc[-1])
 
-            sma20 = float(df['Close'].rolling(window=20).mean().iloc[-1])
+            sma20 = float(df['Close'].rolling(20).mean().iloc[-1])
 
-            # Levels – all scalars
             support     = [round(low_40), round(low_40 + atr * 0.6)]
             resistance  = [round(high_40 - atr * 0.6), round(high_40)]
             liquidity   = round(low_40 - atr * 0.8)
 
-            # ── Bias logic – pure scalar comparisons ──────────────────────
+            # Bias & entry point – all scalars
             if current_price > sma20 + atr * 0.4:
                 bias = "Bullish"
-                entry_zone = f"Buy limit {round(current_price - atr*0.5)} – {round(current_price - atr*0.3)}"
+                entry_point = round(current_price - atr * 0.4)          # specific point
+                entry_text = f"Enter long at ≈ **{entry_point}** (±10 points)"
                 sl   = min(support) - int(atr * 0.4)
-                risk = current_price - sl
-                tp1  = round(current_price + risk)
-                tp2  = round(current_price + risk * rr)
+                risk = entry_point - sl
+                tp1  = round(entry_point + risk)
+                tp2  = round(entry_point + risk * rr)
 
             elif current_price < sma20 - atr * 0.4:
                 bias = "Bearish"
-                entry_zone = f"Sell limit {round(current_price + atr*0.3)} – {round(current_price + atr*0.5)}"
+                entry_point = round(current_price + atr * 0.4)
+                entry_text = f"Enter short at ≈ **{entry_point}** (±10 points)"
                 sl   = max(resistance) + int(atr * 0.4)
-                risk = sl - current_price
-                tp1  = round(current_price - risk)
-                tp2  = round(current_price - risk * rr)
+                risk = sl - entry_point
+                tp1  = round(entry_point - risk)
+                tp2  = round(entry_point - risk * rr)
 
             else:
                 bias = "Range / Neutral"
-                entry_zone = f"Wait for break above {resistance[1]} or below {support[0]}"
+                entry_text = f"No clear entry yet. Watch for break above {resistance[1]} or below {support[0]}"
                 sl = tp1 = tp2 = None
 
-            reason = f"Price ≈ {price_r} vs SMA20 ≈ {round(sma20)}. ATR ≈ {round(atr)}."
+            reason = f"Price {price_r} vs SMA20 {round(sma20)}. ATR ≈ {round(atr)}."
 
             st.session_state.analysis = {
                 'price': price_r,
                 'bias': bias,
-                'entry': entry_zone,
+                'entry': entry_text,
                 'sl': sl,
                 'tp1': tp1,
                 'tp2': tp2,
@@ -138,11 +136,11 @@ if st.session_state.analysis:
     st.subheader("Current Analysis")
 
     st.markdown(f"""
-**Price** ≈ **{a['price']}**
+**Current Price** ≈ **{a['price']}**
 
 **Bias** → **{a['bias']}**
 
-**Suggested Entry** → {a['entry']}
+**Point of Entry** → {a['entry']}
 
 **Stop Loss** → {a['sl'] if a['sl'] is not None else '—'}  
 **TP1** → {a['tp1'] if a['tp1'] is not None else '—'}  
@@ -150,14 +148,14 @@ if st.session_state.analysis:
 
 **Support** → {a['support']}  
 **Resistance** → {a['resistance']}  
-**Liquidity** ≈ {a['liquidity']}
+**Liquidity pool** ≈ {a['liquidity']}
 
 **Reason**  
 {a['reason']}
     """)
 
-    # Plotly backup
-    st.subheader("Quick levels overlay")
+    # Plotly chart with levels
+    st.subheader("Levels overlay")
     cp = a['price']
     fig = go.Figure()
     fig.add_trace(go.Scatter(
