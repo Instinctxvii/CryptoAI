@@ -1,13 +1,17 @@
 import streamlit as st
 import pandas as pd
 import requests
+import subprocess
+import sys
 
-# ================= SAFE IMPORT FOR BS4 =================
+# ================= AUTO-INSTALL BS4 =================
 try:
     from bs4 import BeautifulSoup
 except ModuleNotFoundError:
-    st.error("The 'beautifulsoup4' package is not installed. Run `pip install beautifulsoup4`.")
-    st.stop()
+    st.warning("Installing missing package 'beautifulsoup4'...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "beautifulsoup4"])
+    from bs4 import BeautifulSoup
+    st.success("'beautifulsoup4' installed successfully! Please rerun the app.")
 
 from openai import OpenAI
 
