@@ -5,30 +5,22 @@ import json
 import yfinance as yf
 from datetime import datetime
 
-# ────────────────────────────────────────────────
-# PAGE CONFIG
-# ────────────────────────────────────────────────
+# Page config
 st.set_page_config(page_title="US30 Trader Demo", layout="wide")
 st.title("US30 / Dow Jones Trader Demo")
-st.caption("Rule-based demo — no API keys — no LLM")
+st.caption("Rule-based demo – no API keys – no LLM")
 
-# ────────────────────────────────────────────────
-# SESSION STATE
-# ────────────────────────────────────────────────
+# Session state
 if 'analysis' not in st.session_state:
     st.session_state.analysis = None
 
-# ────────────────────────────────────────────────
-# SIDEBAR
-# ────────────────────────────────────────────────
+# Sidebar
 with st.sidebar:
     st.header("Settings")
     rr = st.slider("Risk:Reward for TP2", 1.5, 4.0, 2.5, 0.5)
 
-# ────────────────────────────────────────────────
-# TRADINGVIEW CHART – loads on startup
-# ────────────────────────────────────────────────
-st.subheader("📈 US30 Live Chart")
+# TradingView chart – loads immediately
+st.subheader("📈 US30 Live Chart (Broker CFD feed)")
 
 tv_symbol = st.text_input("TradingView Symbol", "CAPITALCOM:US30")
 
@@ -54,11 +46,11 @@ st.components.v1.html(f"""
 </div>
 """, height=620)
 
-# ────────────────────────────────────────────────
-# ANALYSIS BUTTON – fixed version with explicit entry point
-# ────────────────────────────────────────────────
+st.info("Note: Chart shows broker CFD price (e.g. CAPITALCOM). Analysis uses Yahoo Finance ^DJI (official index). Small differences (10–100 points) are normal.")
+
+# Analyze button
 if st.button("Analyze Current Structure", type="primary"):
-    with st.spinner("Fetching data..."):
+    with st.spinner("Fetching data from Yahoo Finance (^DJI)..."):
         try:
             df = yf.download("^DJI", period="5d", interval="15m", progress=False)
 
@@ -68,7 +60,7 @@ if st.button("Analyze Current Structure", type="primary"):
 
             df = df[['Close', 'High', 'Low']].astype(float)
 
-            # Scalars only – no Series in any condition
+            # Scalars
             current_price = float(df['Close'].iloc[-1])
             price_r = round(current_price)
 
@@ -83,10 +75,9 @@ if st.button("Analyze Current Structure", type="primary"):
             resistance  = [round(high_40 - atr * 0.6), round(high_40)]
             liquidity   = round(low_40 - atr * 0.8)
 
-            # Bias & entry point – all scalars
             if current_price > sma20 + atr * 0.4:
                 bias = "Bullish"
-                entry_point = round(current_price - atr * 0.4)          # specific point
+                entry_point = round(current_price - atr * 0.4)
                 entry_text = f"Enter long at ≈ **{entry_point}** (±10 points)"
                 sl   = min(support) - int(atr * 0.4)
                 risk = entry_point - sl
@@ -104,7 +95,7 @@ if st.button("Analyze Current Structure", type="primary"):
 
             else:
                 bias = "Range / Neutral"
-                entry_text = f"No clear entry yet. Watch for break above {resistance[1]} or below {support[0]}"
+                entry_text = f"No clear entry. Watch break above {resistance[1]} or below {support[0]}"
                 sl = tp1 = tp2 = None
 
             reason = f"Price {price_r} vs SMA20 {round(sma20)}. ATR ≈ {round(atr)}."
@@ -122,21 +113,19 @@ if st.button("Analyze Current Structure", type="primary"):
                 'reason': reason
             }
 
-            st.success("Analysis complete")
+            st.success(f"Done – Analysis price (Yahoo ^DJI): {price_r}")
 
         except Exception as e:
             st.error(f"Error: {str(e)}")
 
-# ────────────────────────────────────────────────
-# DISPLAY RESULTS
-# ────────────────────────────────────────────────
+# Show results
 if st.session_state.analysis:
     a = st.session_state.analysis
 
-    st.subheader("Current Analysis")
+    st.subheader("Current Analysis (based on Yahoo ^DJI feed)")
 
     st.markdown(f"""
-**Current Price** ≈ **{a['price']}**
+**Analysis Price** (Yahoo Finance ^DJI last close) ≈ **{a['price']}**
 
 **Bias** → **{a['bias']}**
 
@@ -154,8 +143,10 @@ if st.session_state.analysis:
 {a['reason']}
     """)
 
-    # Plotly chart with levels
-    st.subheader("Levels overlay")
+    st.info("Note: TradingView chart may show slightly different live price (broker CFD feed). Use analysis price for consistency.")
+
+    # Plotly
+    st.subheader("Levels overlay (based on analysis price)")
     cp = a['price']
     fig = go.Figure()
     fig.add_trace(go.Scatter(
