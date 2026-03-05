@@ -1,50 +1,37 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
-import pytz
 import json
 import yfinance as yf
+from datetime import datetime
+import pytz
 
 # ================= PAGE CONFIG =================
-st.set_page_config(page_title="AI Trader Terminal", layout="wide")
-st.title("📊 AI Trader Terminal — US30 Live Demo")
+st.set_page_config(page_title="US30 Trader Demo", layout="wide")
+st.title("US30 / Dow Jones Trader Demo")
 
 # ================= SESSION STATE =================
-if 'analysis_done' not in st.session_state:
-    st.session_state.analysis_done = False
-    st.session_state.current_price = 0.0
-    st.session_state.bias = "Waiting..."
-    st.session_state.entry = "Waiting..."
-    st.session_state.sl = None
-    st.session_state.tp1 = None
-    st.session_state.tp2 = None
-    st.session_state.support = []
-    st.session_state.resistance = []
-    st.session_state.liquidity = None
-    st.session_state.reason = ""
+if 'analysis' not in st.session_state:
+    st.session_state.analysis = None
 
 # ================= SIDEBAR =================
 with st.sidebar:
     st.header("Settings")
-    rr_ratio = st.slider("Risk:Reward Ratio", 1.0, 3.0, 2.0, step=0.5)
+    rr = st.slider("Risk:Reward for TP2", 1.5, 4.0, 2.5, 0.5)
     st.markdown("---")
-    st.caption("Simple rule-based analysis demo\nNo API key required")
+    st.caption("Rule-based demo — no API keys required")
 
-# ================= SYMBOL & TRADINGVIEW =================
-tv_symbol = st.text_input("TradingView Symbol", value="CAPITALCOM:US30")
+# ================= TRADINGVIEW CHART – LOADS ON STARTUP =================
+st.subheader("📈 US30 Live Chart")
 
-# ================= TRADINGVIEW CHART - LOADS IMMEDIATELY =================
-st.subheader("📈 US30 / Dow Jones Live Chart")
+# Use a symbol that reliably works in the lightweight widget
+tv_symbol = st.text_input("TradingView Symbol", "CAPITALCOM:US30")
+
 symbol_clean = "US30"
-
-# Initial empty overlays (will be updated after analysis)
-overlays = []
-overlays_json = json.dumps(overlays)
 
 st.components.v1.html(f"""
 <div class="tradingview-widget-container">
-  <div id="tradingview_{symbol_clean}"></div>
+  <div id="tvchart"></div>
   <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
   <script type="text/javascript">
     new TradingView.widget({{
@@ -56,150 +43,152 @@ st.components.v1.html(f"""
       "theme": "dark",
       "style": "1",
       "locale": "en",
+      "toolbar_bg": "#f1f3f6",
       "enable_publishing": false,
       "allow_symbol_change": true,
-      "container_id": "tradingview_{symbol_clean}"
+      "container_id": "tvchart"
     }});
   </script>
 </div>
 """, height=620)
 
-# ================= FETCH & ANALYZE BUTTON =================
-if st.button("📡 Fetch Latest Price & Run Analysis", type="primary"):
-    with st.spinner("Fetching US30 data..."):
+# ================= ANALYSIS BUTTON =================
+if st.button("Analyze Current Structure", type="primary"):
+    with st.spinner("Fetching latest data..."):
         try:
-            hist = yf.download("^DJI", period="5d", interval="15m", progress=False)
+            df = yf.download("^DJI", period="5d", interval="15m", progress=False)
 
-            if hist.empty or len(hist) < 20:
-                st.error("Not enough recent data. Try again later.")
+            if df.empty or len(df) < 30:
+                st.error("Not enough recent data")
+                st.stop()
+
+            price = round(df['Close'].iloc[-1])
+            high_40 = round(df['High'].rolling(40).max().iloc[-1])
+            low_40  = round(df['Low'].rolling(40).min().iloc[-1])
+            atr     = round((df['High'] - df['Low']).rolling(14).mean().iloc[-1])
+
+            # Very basic structure
+            support     = [low_40, low_40 + int(atr * 0.6)]
+            resistance  = [high_40 - int(atr * 0.6), high_40]
+            liquidity   = low_40 - int(atr * 0.8)
+
+            sma20 = round(df['Close'].rolling(20).mean().iloc[-1])
+
+            if price > sma20 + atr * 0.4:
+                bias = "Bullish"
+                entry_zone = f"Buy limit zone {price - int(atr*0.5)} – {price - int(atr*0.3)}"
+                sl = min(support) - int(atr * 0.4)
+                risk = price - sl
+                tp1 = price + risk
+                tp2 = price + int(risk * rr)
+
+            elif price < sma20 - atr * 0.4:
+                bias = "Bearish"
+                entry_zone = f"Sell limit zone {price + int(atr*0.5)} – {price + int(atr*0.3)}"
+                sl = max(resistance) + int(atr * 0.4)
+                risk = sl - price
+                tp1 = price - risk
+                tp2 = price - int(risk * rr)
+
             else:
-                current_price = round(hist['Close'].iloc[-1], 0)
+                bias = "Range / Neutral"
+                entry_zone = f"Wait for breakout — above {resistance[1]} or below {support[0]}"
+                sl = tp1 = tp2 = None
 
-                # Very simple structure detection
-                recent_high = hist['High'].rolling(40).max().iloc[-1]
-                recent_low = hist['Low'].rolling(40).min().iloc[-1]
-                atr = (hist['High'] - hist['Low']).rolling(14).mean().iloc[-1]
+            reason = f"Price at {price} vs SMA20 {sma20}. ATR ≈ {atr}. Recent range {low_40}–{high_40}."
 
-                support = [round(recent_low, 0), round(recent_low + atr * 0.6, 0)]
-                resistance = [round(recent_high - atr * 0.6, 0), round(recent_high, 0)]
-                liquidity = round(recent_low - atr * 0.7, 0)
+            st.session_state.analysis = {
+                'price': price,
+                'bias': bias,
+                'entry': entry_zone,
+                'sl': sl,
+                'tp1': tp1,
+                'tp2': tp2,
+                'support': support,
+                'resistance': resistance,
+                'liquidity': liquidity,
+                'reason': reason
+            }
 
-                sma20 = hist['Close'].rolling(20).mean().iloc[-1]
-                last_close = hist['Close'].iloc[-1]
-
-                if last_close > sma20 + atr * 0.3:
-                    bias = "Bullish"
-                    entry = round(last_close - atr * 0.4, 0)   # pullback entry zone
-                    sl = round(min(support) - atr * 0.5, 0)
-                    risk = entry - sl
-                    tp1 = round(entry + risk * 1.0, 0)
-                    tp2 = round(entry + risk * rr_ratio, 0)
-                    reason = "Price above SMA20 + strong momentum. Looking for pullback to enter long."
-
-                elif last_close < sma20 - atr * 0.3:
-                    bias = "Bearish"
-                    entry = round(last_close + atr * 0.4, 0)
-                    sl = round(max(resistance) + atr * 0.5, 0)
-                    risk = sl - entry
-                    tp1 = round(entry - risk * 1.0, 0)
-                    tp2 = round(entry - risk * rr_ratio, 0)
-                    reason = "Price below SMA20 + bearish momentum. Looking for rally to enter short."
-
-                else:
-                    bias = "Neutral / Range"
-                    entry = f"Around {round(last_close, -1)} ± 50"
-                    sl = tp1 = tp2 = None
-                    reason = "No clear directional edge. Waiting for breakout above resistance or below support."
-
-                # Save
-                st.session_state.update({
-                    'analysis_done': True,
-                    'current_price': current_price,
-                    'bias': bias,
-                    'entry': entry,
-                    'sl': sl,
-                    'tp1': tp1,
-                    'tp2': tp2,
-                    'support': support,
-                    'resistance': resistance,
-                    'liquidity': liquidity,
-                    'reason': reason
-                })
-
-                st.success(f"Analysis done – Current price ≈ {current_price}")
-
-                # Update chart overlays
-                overlays = []
-                for lvl in support:
-                    overlays.append({"price": float(lvl), "color": "orange", "width": 2})
-                for lvl in resistance:
-                    overlays.append({"price": float(lvl), "color": "red", "width": 2})
-                if liquidity:
-                    overlays.append({"price": float(liquidity), "color": "lime", "width": 3, "linestyle": "dashed"})
-                if sl:
-                    overlays.append({"price": float(sl), "color": "purple", "width": 2, "linestyle": "dotted"})
-                if tp1:
-                    overlays.append({"price": float(tp1), "color": "#00ff88", "width": 2})
-                if tp2:
-                    overlays.append({"price": float(tp2), "color": "#00cc66", "width": 3})
-
-                overlays_json = json.dumps(overlays)
-
-                # Re-render chart with overlays (Streamlit limitation → we show message)
-                st.info("Chart updated with levels. Refresh page if overlays do not appear immediately.")
+            st.success("Analysis complete")
 
         except Exception as e:
-            st.error(f"Error: {str(e)}")
+            st.error(f"Fetch failed: {str(e)}")
 
-# ================= DISPLAY ANALYSIS =================
-st.subheader("🧠 Analysis Result")
+# ================= SHOW RESULTS =================
+if st.session_state.analysis:
+    a = st.session_state.analysis
 
-if st.session_state.analysis_done:
+    st.subheader("Current Analysis")
+
     st.markdown(f"""
-**Current Price** ≈ **{st.session_state.current_price}**
+**Price** ≈ **{a['price']}**
 
-**Bias** → **{st.session_state.bias}**
+**Bias** → **{a['bias']}**
 
-**Suggested Entry** → {st.session_state.entry}  
-**Stop Loss** → {st.session_state.sl if st.session_state.sl else "—"}  
-**TP1 (1:1)** → {st.session_state.tp1 if st.session_state.tp1 else "—"}  
-**TP2 ({rr_ratio}:1)** → {st.session_state.tp2 if st.session_state.tp2 else "—"}
+**Suggested Entry** → {a['entry']}
 
-**Support** → {st.session_state.support}  
-**Resistance** → {st.session_state.resistance}  
-**Liquidity zone** ≈ {st.session_state.liquidity}
+**Stop Loss** → {a['sl'] if a['sl'] else '—'}  
+**TP1** → {a['tp1'] if a['tp1'] else '—'}  
+**TP2** ({rr:.1f} : 1) → {a['tp2'] if a['tp2'] else '—'}
 
-**Reasoning**  
-{st.session_state.reason}
+**Support** → {a['support']}  
+**Resistance** → {a['resistance']}  
+**Liquidity pool** ≈ {a['liquidity']}
+
+**Reason**  
+{a['reason']}
     """)
-else:
-    st.info("Click the button above to fetch latest price and run analysis")
 
-# ================= SIMPLE PLOTLY =================
-if st.session_state.analysis_done:
-    st.subheader("📊 Quick Price + Levels")
+    # ================= UPDATE CHART OVERLAYS =================
+    overlays = []
+    for lvl in a['support']:
+        overlays.append({"price": float(lvl), "color": "orange", "width": 2})
+    for lvl in a['resistance']:
+        overlays.append({"price": float(lvl), "color": "red", "width": 2})
+    if a['liquidity']:
+        overlays.append({"price": float(a['liquidity']), "color": "lime", "width": 3, "linestyle": "dashed"})
+    if a['sl']:
+        overlays.append({"price": float(a['sl']), "color": "purple", "width": 2, "linestyle": "dotted"})
+    if a['tp1']:
+        overlays.append({"price": float(a['tp1']), "color": "#00ff88", "width": 2})
+    if a['tp2']:
+        overlays.append({"price": float(a['tp2']), "color": "#00cc66", "width": 3})
 
-    cp = st.session_state.current_price
-    times = pd.date_range(end=datetime.now(pytz.UTC), periods=10, freq="15min")
-    prices = [cp - 400, cp - 250, cp - 100, cp, cp + 80, cp + 180, cp + 300, cp + 200, cp + 100, cp]
+    overlays_json = json.dumps(overlays)
 
+    # Re-render TradingView with overlays (note: widget doesn't update dynamically in Streamlit;
+    # user needs to refresh page after analysis for overlays to appear)
+    st.info("Refresh page to see updated levels on TradingView chart")
+
+    # Simple Plotly backup
+    st.subheader("Quick levels overlay")
+    cp = a['price']
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=times, y=prices, mode="lines+markers", name="Price"))
+    fig.add_trace(go.Scatter(
+        x=pd.date_range(end=datetime.now(), periods=6, freq="30min"),
+        y=[cp-250, cp-120, cp, cp+80, cp+180, cp+120],
+        mode="lines+markers",
+        name="Price"
+    ))
 
-    for lvl in st.session_state.support:
-        fig.add_hline(y=lvl, line_dash="dash", line_color="orange", annotation_text=f"Support {lvl}")
-    for lvl in st.session_state.resistance:
-        fig.add_hline(y=lvl, line_dash="dash", line_color="red", annotation_text=f"Resistance {lvl}")
-    if st.session_state.liquidity:
-        fig.add_hline(y=st.session_state.liquidity, line_dash="dot", line_color="lime", annotation_text=f"Liquidity")
-    if st.session_state.sl:
-        fig.add_hline(y=st.session_state.sl, line_color="purple", annotation_text=f"SL")
-    if st.session_state.tp1:
-        fig.add_hline(y=st.session_state.tp1, line_color="#00ff88", annotation_text=f"TP1")
-    if st.session_state.tp2:
-        fig.add_hline(y=st.session_state.tp2, line_color="#00cc66", annotation_text=f"TP2")
+    for lvl in a['support']:
+        fig.add_hline(y=lvl, line_dash="dash", line_color="orange", annotation_text=str(lvl))
+    for lvl in a['resistance']:
+        fig.add_hline(y=lvl, line_dash="dash", line_color="red", annotation_text=str(lvl))
+    if a['liquidity']:
+        fig.add_hline(y=a['liquidity'], line_dash="dot", line_color="lime")
+    if a['sl']:
+        fig.add_hline(y=a['sl'], line_color="purple")
+    if a['tp1']:
+        fig.add_hline(y=a['tp1'], line_color="#00ff88")
+    if a['tp2']:
+        fig.add_hline(y=a['tp2'], line_color="#00cc66")
 
     fig.update_layout(height=450, template="plotly_dark")
     st.plotly_chart(fig, use_container_width=True)
 
-st.caption("Demo version • Rule-based only • Not financial advice • Chart loads on startup")
+else:
+    st.info("Click 'Analyze Current Structure' to get levels and trade idea")
+
+st.caption("Demo only – rule-based only – not financial advice")
