@@ -6,10 +6,6 @@ import pytz
 import json
 import yfinance as yf
 
-# Workaround for yfinance cache permission issue on Streamlit Cloud
-import appdirs
-appdirs.user_cache_dir = lambda *args: "/tmp"
-
 # ================= PAGE CONFIG =================
 st.set_page_config(page_title="AI Trading Terminal", layout="wide")
 st.title("📊 AI Trading Terminal — Live AI Trader + TP/SL")
@@ -53,17 +49,13 @@ tv_symbol = st.text_input("TradingView Symbol (if different)", value=tv_default)
 # ================= MAIN BUTTON =================
 if st.button("📡 Fetch Data & Run AI Trader Analysis", type="primary"):
     with st.spinner("Fetching market data and analyzing..."):
-        # Select Yahoo Finance ticker
-        if market_type == "US30":
-            yf_ticker = "^DJI"          # Dow Jones
-        else:
-            yf_ticker = f"{symbol.upper()}=X"   # e.g. EURUSD=X
+        yf_ticker = "^DJI" if market_type == "US30" else f"{symbol.upper()}=X"
 
         try:
             hist = yf.download(yf_ticker, period="7d", interval="15m", progress=False)
 
-            if hist.empty or len(hist) < 40:
-                st.error("Not enough recent data. Try again later.")
+            if hist.empty or len(hist) < 20:
+                st.error("Not enough recent data available. Try again later or check symbol.")
             else:
                 current_price = hist['Close'].iloc[-1]
                 prec = 0 if market_type == "US30" else 4
@@ -83,15 +75,26 @@ if st.button("📡 Fetch Data & Run AI Trader Analysis", type="primary"):
                 ])
                 liquidity_pool = round(recent_low - atr * 0.7, prec)
 
-                # Simple RSI
+                # RSI calculation - safer version
                 delta = hist['Close'].diff()
-                gain = delta.where(delta > 0, 0).rolling(14).mean()
-                loss = -delta.where(delta < 0, 0).rolling(14).mean()
-                rs = gain / loss
-                rsi = 100 - (100 / (1 + rs)).iloc[-1]
+                gain = delta.where(delta > 0, 0)
+                loss = -delta.where(delta < 0, 0)
+
+                avg_gain = gain.rolling(window=14, min_periods=1).mean()
+                avg_loss = loss.rolling(window=14, min_periods=1).mean()
+
+                rs = avg_gain / avg_loss.replace(0, float('inf'))  # avoid div by zero
+                rsi_series = 100 - (100 / (1 + rs))
+
+                # Final RSI value with fallback
+                if len(rsi_series.dropna()) > 0:
+                    rsi = rsi_series.iloc[-1]
+                else:
+                    rsi = 50.0
 
                 sma20 = hist['Close'].rolling(20).mean().iloc[-1]
 
+                # Trading logic
                 if current_price > sma20 and rsi < 68:
                     bias = "Bullish"
                     entry = max(current_price, support_levels[1])
@@ -99,8 +102,8 @@ if st.button("📡 Fetch Data & Run AI Trader Analysis", type="primary"):
                     risk  = entry - sl
                     tp1   = round(entry + risk * 1.0, prec)
                     tp2   = round(entry + risk * rr_ratio, prec)
-                    entry_text = f"**LONG** — consider entry near **{entry:.{prec}f}**"
-                    pred_text  = f"Uptrend likely. Targets: TP1 **{tp1:.{prec}f}**, TP2 **{tp2:.{prec}f}**"
+                    entry_text = f"**LONG** near **{entry:.{prec}f}**"
+                    pred_text  = f"Uptrend likely. TP1 **{tp1:.{prec}f}** • TP2 **{tp2:.{prec}f}**"
 
                 elif current_price < sma20 and rsi > 32:
                     bias = "Bearish"
@@ -109,13 +112,13 @@ if st.button("📡 Fetch Data & Run AI Trader Analysis", type="primary"):
                     risk  = sl - entry
                     tp1   = round(entry - risk * 1.0, prec)
                     tp2   = round(entry - risk * rr_ratio, prec)
-                    entry_text = f"**SHORT** — consider entry near **{entry:.{prec}f}**"
-                    pred_text  = f"Downtrend likely. Targets: TP1 **{tp1:.{prec}f}**, TP2 **{tp2:.{prec}f}**"
+                    entry_text = f"**SHORT** near **{entry:.{prec}f}**"
+                    pred_text  = f"Downtrend likely. TP1 **{tp1:.{prec}f}** • TP2 **{tp2:.{prec}f}**"
 
                 else:
                     bias = "Neutral"
-                    entry_text = "Wait for breakout"
-                    pred_text  = f"Range-bound. Watch **{resistance_levels[1]:.{prec}f}** up or **{support_levels[0]:.{prec}f}** down"
+                    entry_text = "Wait for breakout or clearer signal"
+                    pred_text  = f"Range-bound. Watch **{resistance_levels[1]:.{prec}f}** ↑ or **{support_levels[0]:.{prec}f}** ↓"
                     sl = tp1 = tp2 = None
 
                 st.session_state.update({
@@ -134,34 +137,77 @@ if st.button("📡 Fetch Data & Run AI Trader Analysis", type="primary"):
                     'yf_ticker': yf_ticker
                 })
 
-                st.success(f"Done — {yf_ticker} @ **{current_price_display}** • {bias}")
+                st.success(f"Analysis complete — {yf_ticker} @ **{current_price_display}** • **{bias}**")
 
         except Exception as e:
-            st.error(f"Data fetch failed: {str(e)}")
+            st.error(f"Data fetch / analysis failed: {str(e)}")
 
-# ================= DISPLAY =================
+# ================= DISPLAY ANALYSIS =================
 st.subheader("🧠 AI Trader Analysis")
 
 if st.session_state.analysis_done:
     st.markdown(f"""
-**Price**: **{st.session_state.current_price}**  
+**Current Price**: **{st.session_state.current_price}**  
 **Bias**: **{st.session_state.bias}**  
 
 **Support**: {st.session_state.support_levels}  
 **Resistance**: {st.session_state.resistance_levels}  
-**Liquidity \~**: {st.session_state.liquidity_pool}
+**Liquidity ≈**: {st.session_state.liquidity_pool}
 
-**Entry**: {st.session_state.entry_suggestion}  
-**SL**: {st.session_state.sl if st.session_state.sl else "—"}  
-**TP1 (1:1)**: {st.session_state.tp1 if st.session_state.tp1 else "—"}  
-**TP2 ({rr_ratio}:1)**: {st.session_state.tp2 if st.session_state.tp2 else "—"}
+**Entry Suggestion**: {st.session_state.entry_suggestion}  
+**Stop Loss**: {st.session_state.sl if st.session_state.sl is not None else "—"}  
+**TP1 (1:1)**: {st.session_state.tp1 if st.session_state.tp1 is not None else "—"}  
+**TP2 ({rr_ratio}:1)**: {st.session_state.tp2 if st.session_state.tp2 is not None else "—"}
 
-**Outlook**: {st.session_state.prediction}
+**AI Outlook**:  
+{st.session_state.prediction}
     """)
 else:
-    st.info("Press the button above to analyze")
+    st.info("Click the button above to fetch live data and get analysis.")
 
-# (The rest — TradingView widget + Plotly chart — remains the same as before.
-#  If you need that part too, let me know and I'll paste the complete version again.)
+# ================= TRADINGVIEW CHART – ALWAYS VISIBLE =================
+st.subheader("📈 TradingView Chart")
 
-st.caption("Not financial advice — verify independently")
+symbol_clean = symbol.upper().replace(" ", "")
+
+# Prepare overlays only if we have levels
+overlays = []
+if st.session_state.analysis_done:
+    for lvl in st.session_state.support_levels:
+        overlays.append({"price": float(lvl), "color": "orange", "width": 2})
+    for lvl in st.session_state.resistance_levels:
+        overlays.append({"price": float(lvl), "color": "red", "width": 2})
+    if st.session_state.liquidity_pool is not None:
+        overlays.append({"price": float(st.session_state.liquidity_pool), "color": "lime", "width": 3, "linestyle": "dashed"})
+    if st.session_state.sl is not None:
+        overlays.append({"price": float(st.session_state.sl), "color": "purple", "width": 2, "linestyle": "dotted"})
+    if st.session_state.tp1 is not None:
+        overlays.append({"price": float(st.session_state.tp1), "color": "#00ff88", "width": 2})
+    if st.session_state.tp2 is not None:
+        overlays.append({"price": float(st.session_state.tp2), "color": "#00cc66", "width": 3})
+
+overlays_json = json.dumps(overlays)
+
+st.components.v1.html(f"""
+<div class="tradingview-widget-container">
+  <div id="tradingview_{symbol_clean}"></div>
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <script type="text/javascript">
+    new TradingView.widget({{
+      "width": "100%",
+      "height": 580,
+      "symbol": "{tv_symbol}",
+      "interval": "5",
+      "timezone": "Etc/UTC",
+      "theme": "dark",
+      "style": "1",
+      "locale": "en",
+      "enable_publishing": false,
+      "allow_symbol_change": true,
+      "container_id": "tradingview_{symbol_clean}"
+    }});
+  </script>
+</div>
+""", height=620)
+
+st.caption("Not financial advice • Use at your own risk • Verify all levels independently")
