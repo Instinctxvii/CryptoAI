@@ -1,9 +1,17 @@
 import streamlit as st
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
+
+# ================= SAFE IMPORT FOR BS4 =================
+try:
+    from bs4 import BeautifulSoup
+except ModuleNotFoundError:
+    st.error("The 'beautifulsoup4' package is not installed. Run `pip install beautifulsoup4`.")
+    st.stop()
+
 from openai import OpenAI
 
+# ================= PAGE CONFIG =================
 st.set_page_config(page_title="AI Trading Terminal", layout="wide")
 st.title("📊 AI Trading Terminal")
 
@@ -53,9 +61,8 @@ if scan_crypto:
 # ================= FOREX SCANNER =================
 if scan_forex:
     st.subheader("💱 Top Forex Pairs Overview")
-    # Placeholder example
     forex_pairs = ["EUR/USD", "USD/JPY", "GBP/USD", "AUD/USD", "USD/CAD"]
-    rates = [1.08, 134.5, 1.24, 0.67, 1.36]
+    rates = [1.08, 134.5, 1.24, 0.67, 1.36]  # Placeholder
     df_forex = pd.DataFrame({"Pair": forex_pairs, "Rate": rates})
     st.dataframe(df_forex, use_container_width=True)
     st.markdown("---")
@@ -68,7 +75,6 @@ if scan_us30:
     try:
         response = requests.get(url)
         soup = BeautifulSoup(response.text, "html.parser")
-        # Grab top headlines (selector may need updating if CNBC layout changes)
         headlines = [h.text.strip() for h in soup.select("a.Card-title")]
         us30_headlines = headlines[:10]  # Top 10
         for h in us30_headlines:
