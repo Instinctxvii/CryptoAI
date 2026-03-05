@@ -10,7 +10,7 @@ from datetime import datetime
 # ────────────────────────────────────────────────
 st.set_page_config(page_title="US30 Trader Demo", layout="wide")
 st.title("US30 / Dow Jones Trader Demo")
-st.caption("Simple rule-based demo — no API keys")
+st.caption("Rule-based demo — no API keys — no LLM")
 
 # ────────────────────────────────────────────────
 # SESSION STATE
@@ -26,7 +26,7 @@ with st.sidebar:
     rr = st.slider("Risk:Reward for TP2", 1.5, 4.0, 2.5, 0.5)
 
 # ────────────────────────────────────────────────
-# TRADINGVIEW – loads on startup
+# TRADINGVIEW CHART – loads immediately
 # ────────────────────────────────────────────────
 st.subheader("📈 US30 Live Chart")
 
@@ -55,37 +55,39 @@ st.components.v1.html(f"""
 """, height=620)
 
 # ────────────────────────────────────────────────
-# ANALYSIS BUTTON
+# ANALYSIS BUTTON – fully scalar-safe version
 # ────────────────────────────────────────────────
 if st.button("Analyze Current Structure", type="primary"):
     with st.spinner("Fetching data..."):
         try:
             df = yf.download("^DJI", period="5d", interval="15m", progress=False)
 
-            if df.empty or len(df) < 20:
-                st.error("Not enough recent data")
+            # Early exit – safe check (df.empty is bool, len(df) is int)
+            if df is None or df.empty or len(df) < 20:
+                st.error("Not enough recent data from Yahoo Finance")
                 st.stop()
 
-            # Keep only needed columns
+            # Keep only needed columns + force numeric
             df = df[['Close', 'High', 'Low']].astype(float)
 
-            # ── Extract scalars ────────────────────────────────────────
-            current_price = df['Close'].iloc[-1]          # scalar
-            price_r       = round(float(current_price))
+            # ── Extract ALL scalars first ─────────────────────────────────
+            current_price = float(df['Close'].iloc[-1])
+            price_r = round(current_price)
 
-            # Rolling → take last value as scalar
-            high_40 = float(df['High'].rolling(40).max().iloc[-1])
-            low_40  = float(df['Low'].rolling(40).min().iloc[-1])
+            # Rolling values → convert to float right away
+            high_40 = float(df['High'].rolling(window=40).max().iloc[-1])
+            low_40  = float(df['Low'].rolling(window=40).min().iloc[-1])
 
-            atr     = float((df['High'] - df['Low']).rolling(14).mean().iloc[-1])
+            atr = float((df['High'] - df['Low']).rolling(window=14).mean().iloc[-1])
 
-            sma20   = float(df['Close'].rolling(20).mean().iloc[-1])
+            sma20 = float(df['Close'].rolling(window=20).mean().iloc[-1])
 
+            # Levels – all scalars
             support     = [round(low_40), round(low_40 + atr * 0.6)]
             resistance  = [round(high_40 - atr * 0.6), round(high_40)]
             liquidity   = round(low_40 - atr * 0.8)
 
-            # ── Bias logic ── only scalars ─────────────────────────────
+            # ── Bias logic – pure scalar comparisons ──────────────────────
             if current_price > sma20 + atr * 0.4:
                 bias = "Bullish"
                 entry_zone = f"Buy limit {round(current_price - atr*0.5)} – {round(current_price - atr*0.3)}"
@@ -107,7 +109,7 @@ if st.button("Analyze Current Structure", type="primary"):
                 entry_zone = f"Wait for break above {resistance[1]} or below {support[0]}"
                 sl = tp1 = tp2 = None
 
-            reason = f"Price {price_r} vs SMA20 {round(sma20)}. ATR ≈ {round(atr)}."
+            reason = f"Price ≈ {price_r} vs SMA20 ≈ {round(sma20)}. ATR ≈ {round(atr)}."
 
             st.session_state.analysis = {
                 'price': price_r,
@@ -122,27 +124,27 @@ if st.button("Analyze Current Structure", type="primary"):
                 'reason': reason
             }
 
-            st.success("Done")
+            st.success("Analysis complete")
 
         except Exception as e:
             st.error(f"Error: {str(e)}")
 
 # ────────────────────────────────────────────────
-# RESULTS
+# DISPLAY RESULTS
 # ────────────────────────────────────────────────
 if st.session_state.analysis:
     a = st.session_state.analysis
 
-    st.subheader("Analysis")
+    st.subheader("Current Analysis")
 
     st.markdown(f"""
 **Price** ≈ **{a['price']}**
 
 **Bias** → **{a['bias']}**
 
-**Entry zone** → {a['entry']}
+**Suggested Entry** → {a['entry']}
 
-**SL** → {a['sl'] if a['sl'] is not None else '—'}  
+**Stop Loss** → {a['sl'] if a['sl'] is not None else '—'}  
 **TP1** → {a['tp1'] if a['tp1'] is not None else '—'}  
 **TP2** ({rr:.1f}:1) → {a['tp2'] if a['tp2'] is not None else '—'}
 
@@ -155,9 +157,10 @@ if st.session_state.analysis:
     """)
 
     # Plotly backup
-    st.subheader("Levels overlay")
+    st.subheader("Quick levels overlay")
     cp = a['price']
-    fig = go.Figure(go.Scatter(
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
         x=pd.date_range(end=datetime.now(), periods=6, freq="30min"),
         y=[cp-300, cp-150, cp, cp+100, cp+200, cp+150],
         mode="lines+markers",
@@ -165,9 +168,9 @@ if st.session_state.analysis:
     ))
 
     for lvl in a['support']:
-        fig.add_hline(y=lvl, line_dash="dash", line_color="orange")
+        fig.add_hline(y=lvl, line_dash="dash", line_color="orange", annotation_text=str(lvl))
     for lvl in a['resistance']:
-        fig.add_hline(y=lvl, line_dash="dash", line_color="red")
+        fig.add_hline(y=lvl, line_dash="dash", line_color="red", annotation_text=str(lvl))
     if a['liquidity'] is not None:
         fig.add_hline(y=a['liquidity'], line_dash="dot", line_color="lime")
     if a['sl'] is not None:
@@ -183,4 +186,4 @@ if st.session_state.analysis:
 else:
     st.info("Press the button to analyze")
 
-st.caption("Demo only – not trading advice")
+st.caption("Demo only – rule-based only – not financial advice")
