@@ -32,21 +32,31 @@ with st.sidebar:
 symbol_default = "EURUSD" if market_type == "Forex" else "US30"
 symbol = st.text_input("Enter Symbol", symbol_default)
 
-# ================= CURRENT PRICE INPUT (key fix) =================
+# ================= CURRENT PRICE INPUT =================
 st.subheader("Current Market Price (from TradingView)")
 if market_type == "US30":
-    default_price = 48622.0
+    default_price = 48600.0  # update this to whatever you see today
     step = 10.0
+    price_format = "%.0f"
 else:
     default_price = 1.0820
     step = 0.0001
+    price_format = "%.4f"
 
 current_price = st.number_input(
     "Paste/enter the current or last visible price from the chart",
     min_value=0.0,
     value=default_price,
     step=step,
-    format="%.4f" if market_type == "Forex" else "%.0f"
+    format=price_format
+)
+
+# ================= OVERRIDE TRADINGVIEW SYMBOL (very useful for debugging) =================
+st.subheader("TradingView Symbol (override if needed)")
+default_tv_symbol = "FX:US30" if market_type == "US30" else "FX:EURUSD"
+tv_symbol_override = st.text_input(
+    "TradingView symbol (e.g. FX:US30, OANDA:US30USD, TVC:DJI, FX:EURUSD)",
+    value=default_tv_symbol
 )
 
 # ================= AI ANALYSIS =================
@@ -56,37 +66,17 @@ trend_bias = "Neutral"
 liquidity_pool = None
 
 if st.button("🤖 Run AI Market Analysis"):
-    # Generate realistic levels based on current price
     if market_type == "US30":
-        # Round to nice psychological levels
         base = round(current_price / 100) * 100
-        
-        support_levels = [
-            round(base - 400),   # strong support
-            round(base - 200)    # near support / liquidity
-        ]
-        resistance_levels = [
-            round(base + 200),   # near resistance
-            round(base + 400)    # strong resistance
-        ]
-        liquidity_pool = round(base - 180)  # typical stop/liquidity grab area below
-        trend_bias = "Neutral"  # you can later add logic based on price action
-        
-    else:  # Forex (e.g. EURUSD, GBPUSD, etc.)
-        base = round(current_price * 10000) / 10000  # 4 decimal places
-        
-        support_levels = [
-            round(base - 0.0040, 4),
-            round(base - 0.0020, 4)
-        ]
-        resistance_levels = [
-            round(base + 0.0020, 4),
-            round(base + 0.0040, 4)
-        ]
+        support_levels = [round(base - 400), round(base - 200)]
+        resistance_levels = [round(base + 200), round(base + 400)]
+        liquidity_pool = round(base - 180)
+    else:
+        base = round(current_price * 10000) / 10000
+        support_levels = [round(base - 0.0040, 4), round(base - 0.0020, 4)]
+        resistance_levels = [round(base + 0.0020, 4), round(base + 0.0040, 4)]
         liquidity_pool = round(base - 0.0015, 4)
-        trend_bias = "Neutral"
 
-    # Display AI analysis
     st.subheader(f"🧠 AI Market Analysis for {symbol}")
     st.markdown(f"""
 **Support Levels:** {support_levels}  
@@ -95,7 +85,7 @@ if st.button("🤖 Run AI Market Analysis"):
 **Liquidity Pools:** Around {liquidity_pool}  
     """)
 
-# Combine all levels for overlays
+# Combine levels for overlays
 all_ai_levels = support_levels + resistance_levels
 if liquidity_pool is not None:
     all_ai_levels.append(liquidity_pool)
@@ -104,21 +94,27 @@ if liquidity_pool is not None:
 st.subheader("📈 Real-Time TradingView Chart")
 
 symbol_clean = symbol.upper().replace(" ", "")
-tv_symbol_map = {
-    "EURUSD": "FX:EURUSD",
-    "GBPUSD": "FX:GBPUSD",
-    "US30": "PEPPERSTONE:US30CFD",  # or AMP:US30, OANDA:US30USD, etc.
-    "DJI": "INDEX:DJI",
-    "SPX": "INDEX:SPX"
-}
-tv_symbol = tv_symbol_map.get(symbol_clean, "PEPPERSTONE:US30CFD")
 
-# Prepare overlays (red for S/R, green for liquidity)
+# Use the override if provided, otherwise fallback logic
+if tv_symbol_override.strip():
+    tv_symbol = tv_symbol_override.strip()
+else:
+    tv_symbol_map = {
+        "EURUSD": "FX:EURUSD",
+        "GBPUSD": "FX:GBPUSD",
+        "USDZAR": "FX:USDZAR",
+        "US30": "FX:US30",           # most reliable public one
+        "DJI": "TVC:DJI",
+        "DOW": "TVC:DJI"
+    }
+    tv_symbol = tv_symbol_map.get(symbol_clean, "FX:US30" if market_type == "US30" else "FX:EURUSD")
+
+# Prepare overlays
 overlays = []
 for lvl in support_levels + resistance_levels:
-    overlays.append({"price": lvl, "color": "red", "width": 1})
+    overlays.append({"price": float(lvl), "color": "red", "width": 1})
 if liquidity_pool is not None:
-    overlays.append({"price": liquidity_pool, "color": "green", "width": 2, "linestyle": "dashed"})
+    overlays.append({"price": float(liquidity_pool), "color": "lime", "width": 2, "linestyle": "dashed"})
 
 overlays_json = json.dumps(overlays)
 
@@ -142,16 +138,16 @@ st.components.v1.html(f"""
       "allow_symbol_change": true,
       "container_id": "tradingview_{symbol_clean}"
     }});
-    // Optional: log levels for debugging
-    overlays.forEach(l => console.log("AI Level drawn at:", l.price));
+    console.log("Using symbol: {tv_symbol}");
+    overlays.forEach(l => console.log("AI Level:", l.price));
   </script>
 </div>
 """, height=580)
 
-# ================= PLOTLY CHART WITH AI LEVELS =================
+# (rest of the code - Plotly chart remains unchanged)
+
 st.subheader("📊 Price Simulation with AI Levels")
 
-# Very simple simulated recent prices (centered around current_price)
 if market_type == "US30":
     base_prices = [current_price - 300, current_price - 150, current_price, 
                    current_price + 100, current_price + 250, current_price]
@@ -166,7 +162,6 @@ fig = go.Figure()
 fig.add_trace(go.Scatter(x=df["Time"], y=df["Price"], 
                         mode="lines+markers", name="Price", line=dict(color="#00ccff")))
 
-# Add AI levels
 for lvl in support_levels:
     fig.add_hline(y=lvl, line_dash="dash", line_color="orange", 
                   annotation_text=f"Support {lvl}", annotation_position="right")
@@ -188,4 +183,4 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 
 st.markdown("---")
-st.caption("Tip: Paste the exact price you see in TradingView into the number input above, then click 'Run AI Market Analysis' to update levels and overlays.")
+st.caption("Tip: If chart still fails → paste one of these into the override field: FX:US30, OANDA:US30USD, TVC:DJI, BLACKBULL:US30")
