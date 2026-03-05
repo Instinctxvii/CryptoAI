@@ -3,3 +3,4 @@ requests
 pandas
 openai
 plotly
+beautifulsoup4
