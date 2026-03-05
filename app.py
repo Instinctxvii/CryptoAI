@@ -1,19 +1,23 @@
 import streamlit as st
 import pandas as pd
 import requests
-import plotly.graph_objects as go
+
+# Attempt to import plotly; show error if missing
+try:
+    import plotly.graph_objects as go
+except ModuleNotFoundError:
+    st.error("Plotly is not installed. Please run `pip install plotly` in your environment.")
+    st.stop()
+
 from openai import OpenAI
 
+# ================= PAGE CONFIG =================
 st.set_page_config(page_title="AI Trading Terminal", layout="wide")
-
 st.title("📊 AI Trading Terminal")
 
 # ================= SIDEBAR =================
-
 with st.sidebar:
-
     st.header("🔑 API Key")
-
     user_key = st.text_input("Enter xAI API Key", type="password")
 
     try:
@@ -28,120 +32,62 @@ with st.sidebar:
         "On Streamlit Cloud, add it via Secrets instead of typing here."
     )
 
-    st.divider()
+    st.markdown("---")
 
     st.header("Market Selection")
+    market = st.selectbox("Select Market", ["Crypto", "Forex", "Indices"])
 
-    market = st.selectbox(
-        "Select Market",
-        ["Crypto", "Forex", "Indices"]
-    )
-
-    st.divider()
+    st.markdown("---")
 
     st.header("Tools")
-
     scan_crypto = st.button("🔎 Scan Crypto Market")
 
 # ================= CRYPTO SCANNER =================
-
 if scan_crypto:
-
     st.subheader("🚀 Top Crypto Market Overview")
-
     url = "https://api.coingecko.com/api/v3/coins/markets"
-
-    params = {
-        "vs_currency": "zar",
-        "order": "market_cap_desc",
-        "per_page": 50,
-        "page": 1
-    }
-
+    params = {"vs_currency": "zar", "order": "market_cap_desc", "per_page": 50, "page": 1}
     data = requests.get(url, params=params).json()
 
     df = pd.DataFrame(data)[
-        [
-            "name",
-            "symbol",
-            "current_price",
-            "market_cap",
-            "price_change_percentage_24h"
-        ]
+        ["name", "symbol", "current_price", "market_cap", "price_change_percentage_24h"]
     ]
-
-    df.columns = [
-        "Name",
-        "Symbol",
-        "Price (R)",
-        "Market Cap",
-        "24h Change %"
-    ]
-
+    df.columns = ["Name", "Symbol", "Price (R)", "Market Cap", "24h Change %"]
     st.dataframe(df, use_container_width=True)
-
-    st.divider()
+    st.markdown("---")
 
 # ================= SYMBOL INPUT =================
-
 if market == "Crypto":
     symbol = st.text_input("Enter Crypto Symbol", "bitcoin")
-
 elif market == "Forex":
     symbol = st.text_input("Enter Forex Pair", "EURUSD")
-
 else:
     symbol = st.text_input("Enter Index", "US30")
 
 # ================= SIMPLE CHART =================
-
 st.subheader("📈 Market Chart")
-
 fig = go.Figure()
-
-fig.add_trace(
-    go.Scatter(
-        y=[1, 2, 3, 2, 4, 5, 4],
-        mode="lines",
-        name="Price"
-    )
-)
-
+fig.add_trace(go.Scatter(y=[1, 2, 3, 2, 4, 5, 4], mode="lines", name="Price"))
 fig.update_layout(height=400)
-
 st.plotly_chart(fig, use_container_width=True)
 
 # ================= MARKET STRUCTURE DISPLAY =================
-
 st.subheader("📊 Smart Money Zones")
-
 col1, col2, col3 = st.columns(3)
-
 with col1:
     st.metric("Support", "Scanning...")
-
 with col2:
     st.metric("Resistance", "Scanning...")
-
 with col3:
     st.metric("Liquidity Pools", "Scanning...")
 
 # ================= AI ANALYSIS =================
-
 if st.button("🤖 Run AI Market Analysis"):
-
     if not xai_key:
         st.error("Please enter your xAI API Key in the sidebar.")
-
     else:
-
         with st.spinner("Running AI market analysis..."):
-
-            client = OpenAI(
-                api_key=xai_key,
-                base_url="https://api.x.ai/v1"
-            )
-
+            client = OpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
             prompt = f"""
 You are a professional institutional trader.
 
@@ -162,38 +108,24 @@ Provide:
 
 Return clear structured analysis.
 """
-
             response = client.chat.completions.create(
                 model="grok-4-1-fast-reasoning",
                 messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a professional institutional trader."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ]
+                    {"role": "system", "content": "You are a professional institutional trader."},
+                    {"role": "user", "content": prompt},
+                ],
             )
-
             st.subheader("🧠 AI Market Analysis")
-
             st.markdown(response.choices[0].message.content)
 
 # ================= PRICE SCENARIOS =================
-
 st.subheader("📉 AI Scenario Projection")
-
 scenario_df = pd.DataFrame({
     "Scenario": ["Bear", "Base", "Bull"],
     "Probability %": [25, 50, 25]
 })
-
 st.bar_chart(scenario_df.set_index("Scenario"))
 
 # ================= DISCLAIMER =================
-
-st.divider()
-
+st.markdown("---")
 st.caption("Educational use only. Trading involves risk.")
