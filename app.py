@@ -8,7 +8,15 @@ from datetime import datetime
 # Page config
 st.set_page_config(page_title="US30 Trader Demo", layout="wide")
 st.title("US30 / Dow Jones Trader Demo")
-st.caption("Rule-based demo – no API keys – no LLM")
+st.caption("Rule-based demo – no API keys")
+
+st.info("""
+**Why prices may differ slightly**  
+Analysis uses Yahoo Finance ^DJI (official index).  
+TradingView shows broker CFD price (e.g. CAPITALCOM:US30).  
+Normal difference: 10–100 points.  
+Paste the live price from the chart below to recalculate using that price.
+""")
 
 # Session state
 if 'analysis' not in st.session_state:
@@ -19,8 +27,8 @@ with st.sidebar:
     st.header("Settings")
     rr = st.slider("Risk:Reward for TP2", 1.5, 4.0, 2.5, 0.5)
 
-# TradingView chart – loads immediately
-st.subheader("📈 US30 Live Chart (Broker CFD feed)")
+# TradingView chart
+st.subheader("📈 US30 Live Chart (Broker CFD)")
 
 tv_symbol = st.text_input("TradingView Symbol", "CAPITALCOM:US30")
 
@@ -46,7 +54,15 @@ st.components.v1.html(f"""
 </div>
 """, height=620)
 
-st.info("Note: Chart shows broker CFD price (e.g. CAPITALCOM). Analysis uses Yahoo Finance ^DJI (official index). Small differences (10–100 points) are normal.")
+# Manual price input to match TradingView
+tv_price_input = st.number_input(
+    "Paste current LIVE price from TradingView chart (optional)",
+    min_value=0.0,
+    step=0.1,
+    format="%.1f",
+    value=0.0,
+    help="Copy the current price shown on the chart to recalculate entry/SL/TP using that price"
+)
 
 # Analyze button
 if st.button("Analyze Current Structure", type="primary"):
@@ -60,9 +76,13 @@ if st.button("Analyze Current Structure", type="primary"):
 
             df = df[['Close', 'High', 'Low']].astype(float)
 
-            # Scalars
-            current_price = float(df['Close'].iloc[-1])
-            price_r = round(current_price)
+            # Base price from yfinance
+            yf_price = float(df['Close'].iloc[-1])
+            price_r = round(yf_price)
+
+            # If user pasted TradingView price → use that instead
+            use_price = tv_price_input if tv_price_input > 1000 else yf_price
+            use_price_r = round(use_price)
 
             high_40 = float(df['High'].rolling(40).max().iloc[-1])
             low_40  = float(df['Low'].rolling(40).min().iloc[-1])
@@ -75,18 +95,18 @@ if st.button("Analyze Current Structure", type="primary"):
             resistance  = [round(high_40 - atr * 0.6), round(high_40)]
             liquidity   = round(low_40 - atr * 0.8)
 
-            if current_price > sma20 + atr * 0.4:
+            if use_price > sma20 + atr * 0.4:
                 bias = "Bullish"
-                entry_point = round(current_price - atr * 0.4)
+                entry_point = round(use_price - atr * 0.4)
                 entry_text = f"Enter long at ≈ **{entry_point}** (±10 points)"
                 sl   = min(support) - int(atr * 0.4)
                 risk = entry_point - sl
                 tp1  = round(entry_point + risk)
                 tp2  = round(entry_point + risk * rr)
 
-            elif current_price < sma20 - atr * 0.4:
+            elif use_price < sma20 - atr * 0.4:
                 bias = "Bearish"
-                entry_point = round(current_price + atr * 0.4)
+                entry_point = round(use_price + atr * 0.4)
                 entry_text = f"Enter short at ≈ **{entry_point}** (±10 points)"
                 sl   = max(resistance) + int(atr * 0.4)
                 risk = sl - entry_point
@@ -98,10 +118,10 @@ if st.button("Analyze Current Structure", type="primary"):
                 entry_text = f"No clear entry. Watch break above {resistance[1]} or below {support[0]}"
                 sl = tp1 = tp2 = None
 
-            reason = f"Price {price_r} vs SMA20 {round(sma20)}. ATR ≈ {round(atr)}."
+            reason = f"Using price {use_price_r} (TradingView if pasted, else Yahoo ^DJI). SMA20 ≈ {round(sma20)}. ATR ≈ {round(atr)}."
 
             st.session_state.analysis = {
-                'price': price_r,
+                'price': use_price_r,
                 'bias': bias,
                 'entry': entry_text,
                 'sl': sl,
@@ -110,10 +130,11 @@ if st.button("Analyze Current Structure", type="primary"):
                 'support': support,
                 'resistance': resistance,
                 'liquidity': liquidity,
-                'reason': reason
+                'reason': reason,
+                'source_note': "TradingView price" if tv_price_input > 1000 else "Yahoo ^DJI"
             }
 
-            st.success(f"Done – Analysis price (Yahoo ^DJI): {price_r}")
+            st.success("Analysis complete")
 
         except Exception as e:
             st.error(f"Error: {str(e)}")
@@ -122,10 +143,10 @@ if st.button("Analyze Current Structure", type="primary"):
 if st.session_state.analysis:
     a = st.session_state.analysis
 
-    st.subheader("Current Analysis (based on Yahoo ^DJI feed)")
+    st.subheader(f"Current Analysis ({a['source_note']})")
 
     st.markdown(f"""
-**Analysis Price** (Yahoo Finance ^DJI last close) ≈ **{a['price']}**
+**Price used** ≈ **{a['price']}**
 
 **Bias** → **{a['bias']}**
 
@@ -143,10 +164,8 @@ if st.session_state.analysis:
 {a['reason']}
     """)
 
-    st.info("Note: TradingView chart may show slightly different live price (broker CFD feed). Use analysis price for consistency.")
-
     # Plotly
-    st.subheader("Levels overlay (based on analysis price)")
+    st.subheader("Levels overlay (using analysis price)")
     cp = a['price']
     fig = go.Figure()
     fig.add_trace(go.Scatter(
