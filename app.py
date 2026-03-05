@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import json
-import yfinance as yf
 from datetime import datetime
 import pytz
+import json
+import yfinance as yf
 
 # ================= PAGE CONFIG =================
 st.set_page_config(page_title="US30 Trader Demo", layout="wide")
@@ -24,7 +24,7 @@ with st.sidebar:
 # ================= TRADINGVIEW CHART – LOADS ON STARTUP =================
 st.subheader("📈 US30 Live Chart")
 
-# Use a symbol that reliably works in the lightweight widget
+# Use a symbol that usually works in the lightweight widget
 tv_symbol = st.text_input("TradingView Symbol", "CAPITALCOM:US30")
 
 symbol_clean = "US30"
@@ -43,7 +43,6 @@ st.components.v1.html(f"""
       "theme": "dark",
       "style": "1",
       "locale": "en",
-      "toolbar_bg": "#f1f3f6",
       "enable_publishing": false,
       "allow_symbol_change": true,
       "container_id": "tvchart"
@@ -58,65 +57,83 @@ if st.button("Analyze Current Structure", type="primary"):
         try:
             df = yf.download("^DJI", period="5d", interval="15m", progress=False)
 
-            if df.empty or len(df) < 30:
-                st.error("Not enough recent data")
-                st.stop()
-
-            price = round(df['Close'].iloc[-1])
-            high_40 = round(df['High'].rolling(40).max().iloc[-1])
-            low_40  = round(df['Low'].rolling(40).min().iloc[-1])
-            atr     = round((df['High'] - df['Low']).rolling(14).mean().iloc[-1])
-
-            # Very basic structure
-            support     = [low_40, low_40 + int(atr * 0.6)]
-            resistance  = [high_40 - int(atr * 0.6), high_40]
-            liquidity   = low_40 - int(atr * 0.8)
-
-            sma20 = round(df['Close'].rolling(20).mean().iloc[-1])
-
-            if price > sma20 + atr * 0.4:
-                bias = "Bullish"
-                entry_zone = f"Buy limit zone {price - int(atr*0.5)} – {price - int(atr*0.3)}"
-                sl = min(support) - int(atr * 0.4)
-                risk = price - sl
-                tp1 = price + risk
-                tp2 = price + int(risk * rr)
-
-            elif price < sma20 - atr * 0.4:
-                bias = "Bearish"
-                entry_zone = f"Sell limit zone {price + int(atr*0.5)} – {price + int(atr*0.3)}"
-                sl = max(resistance) + int(atr * 0.4)
-                risk = sl - price
-                tp1 = price - risk
-                tp2 = price - int(risk * rr)
-
+            if df is None or df.empty or len(df) < 30:
+                st.error("Not enough recent data from Yahoo Finance")
             else:
-                bias = "Range / Neutral"
-                entry_zone = f"Wait for breakout — above {resistance[1]} or below {support[0]}"
-                sl = tp1 = tp2 = None
+                # Force numeric columns
+                df = df[['Open', 'High', 'Low', 'Close']].astype(float)
 
-            reason = f"Price at {price} vs SMA20 {sma20}. ATR ≈ {atr}. Recent range {low_40}–{high_40}."
+                # Get scalar values safely
+                current_price = float(df['Close'].iloc[-1])
+                price_rounded = round(current_price)
 
-            st.session_state.analysis = {
-                'price': price,
-                'bias': bias,
-                'entry': entry_zone,
-                'sl': sl,
-                'tp1': tp1,
-                'tp2': tp2,
-                'support': support,
-                'resistance': resistance,
-                'liquidity': liquidity,
-                'reason': reason
-            }
+                # Rolling calculations → take last value immediately as scalar
+                high_40_series = df['High'].rolling(40).max()
+                low_40_series  = df['Low'].rolling(40).min()
+                atr_series     = (df['High'] - df['Low']).rolling(14).mean()
 
-            st.success("Analysis complete")
+                high_40 = float(high_40_series.iloc[-1]) if not pd.isna(high_40_series.iloc[-1]) else current_price
+                low_40  = float(low_40_series.iloc[-1])  if not pd.isna(low_40_series.iloc[-1])  else current_price
+                atr     = float(atr_series.iloc[-1])     if not pd.isna(atr_series.iloc[-1])     else 50.0
+
+                support     = [round(low_40), round(low_40 + atr * 0.6)]
+                resistance  = [round(high_40 - atr * 0.6), round(high_40)]
+                liquidity   = round(low_40 - atr * 0.8)
+
+                sma20_series = df['Close'].rolling(20).mean()
+                sma20 = float(sma20_series.iloc[-1]) if not pd.isna(sma20_series.iloc[-1]) else current_price
+
+                # All comparisons now use scalars only
+                if current_price > (sma20 + atr * 0.4):
+                    bias = "Bullish"
+                    entry_low  = round(current_price - atr * 0.5)
+                    entry_high = round(current_price - atr * 0.3)
+                    entry_zone = f"Buy limit zone {entry_low} – {entry_high}"
+                    sl   = min(support) - int(atr * 0.4)
+                    risk = current_price - sl
+                    tp1  = round(current_price + risk)
+                    tp2  = round(current_price + risk * rr)
+
+                elif current_price < (sma20 - atr * 0.4):
+                    bias = "Bearish"
+                    entry_low  = round(current_price + atr * 0.3)
+                    entry_high = round(current_price + atr * 0.5)
+                    entry_zone = f"Sell limit zone {entry_low} – {entry_high}"
+                    sl   = max(resistance) + int(atr * 0.4)
+                    risk = sl - current_price
+                    tp1  = round(current_price - risk)
+                    tp2  = round(current_price - risk * rr)
+
+                else:
+                    bias = "Range / Neutral"
+                    entry_zone = f"Wait for breakout above {resistance[1]} or below {support[0]}"
+                    sl = tp1 = tp2 = None
+
+                reason = (
+                    f"Price {price_rounded} vs SMA20 {round(sma20)}. "
+                    f"ATR ≈ {round(atr)}. Recent range {round(low_40)}–{round(high_40)}."
+                )
+
+                st.session_state.analysis = {
+                    'price': price_rounded,
+                    'bias': bias,
+                    'entry': entry_zone,
+                    'sl': sl,
+                    'tp1': tp1,
+                    'tp2': tp2,
+                    'support': support,
+                    'resistance': resistance,
+                    'liquidity': liquidity,
+                    'reason': reason
+                }
+
+                st.success(f"Analysis complete – Price ≈ {price_rounded}")
 
         except Exception as e:
-            st.error(f"Fetch failed: {str(e)}")
+            st.error(f"Fetch or calculation failed: {str(e)}\nPlease try again.")
 
 # ================= SHOW RESULTS =================
-if st.session_state.analysis:
+if st.session_state.get('analysis'):
     a = st.session_state.analysis
 
     st.subheader("Current Analysis")
@@ -128,9 +145,9 @@ if st.session_state.analysis:
 
 **Suggested Entry** → {a['entry']}
 
-**Stop Loss** → {a['sl'] if a['sl'] else '—'}  
-**TP1** → {a['tp1'] if a['tp1'] else '—'}  
-**TP2** ({rr:.1f} : 1) → {a['tp2'] if a['tp2'] else '—'}
+**Stop Loss** → {a['sl'] if a['sl'] is not None else '—'}  
+**TP1** → {a['tp1'] if a['tp1'] is not None else '—'}  
+**TP2** ({rr:.1f} : 1) → {a['tp2'] if a['tp2'] is not None else '—'}
 
 **Support** → {a['support']}  
 **Resistance** → {a['resistance']}  
@@ -146,19 +163,17 @@ if st.session_state.analysis:
         overlays.append({"price": float(lvl), "color": "orange", "width": 2})
     for lvl in a['resistance']:
         overlays.append({"price": float(lvl), "color": "red", "width": 2})
-    if a['liquidity']:
+    if a['liquidity'] is not None:
         overlays.append({"price": float(a['liquidity']), "color": "lime", "width": 3, "linestyle": "dashed"})
-    if a['sl']:
+    if a['sl'] is not None:
         overlays.append({"price": float(a['sl']), "color": "purple", "width": 2, "linestyle": "dotted"})
-    if a['tp1']:
+    if a['tp1'] is not None:
         overlays.append({"price": float(a['tp1']), "color": "#00ff88", "width": 2})
-    if a['tp2']:
+    if a['tp2'] is not None:
         overlays.append({"price": float(a['tp2']), "color": "#00cc66", "width": 3})
 
     overlays_json = json.dumps(overlays)
 
-    # Re-render TradingView with overlays (note: widget doesn't update dynamically in Streamlit;
-    # user needs to refresh page after analysis for overlays to appear)
     st.info("Refresh page to see updated levels on TradingView chart")
 
     # Simple Plotly backup
@@ -176,13 +191,13 @@ if st.session_state.analysis:
         fig.add_hline(y=lvl, line_dash="dash", line_color="orange", annotation_text=str(lvl))
     for lvl in a['resistance']:
         fig.add_hline(y=lvl, line_dash="dash", line_color="red", annotation_text=str(lvl))
-    if a['liquidity']:
+    if a['liquidity'] is not None:
         fig.add_hline(y=a['liquidity'], line_dash="dot", line_color="lime")
-    if a['sl']:
+    if a['sl'] is not None:
         fig.add_hline(y=a['sl'], line_color="purple")
-    if a['tp1']:
+    if a['tp1'] is not None:
         fig.add_hline(y=a['tp1'], line_color="#00ff88")
-    if a['tp2']:
+    if a['tp2'] is not None:
         fig.add_hline(y=a['tp2'], line_color="#00cc66")
 
     fig.update_layout(height=450, template="plotly_dark")
