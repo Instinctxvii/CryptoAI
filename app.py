@@ -1,40 +1,211 @@
 import streamlit as st
-import requests
 import pandas as pd
-from datetime import datetime
+import requests
+import plotly.graph_objects as go
 from openai import OpenAI
 
-st.set_page_config(page_title="AI Crypto Evaluator", page_icon="🚀", layout="wide")
-st.title("🚀 AI Crypto Evaluator")
-st.markdown("**Grok-powered analysis** against your exact 10 criteria + 12-month price projections")
+st.set_page_config(page_title="AI Trading Terminal", layout="wide")
 
-# ====================== SIDEBAR with xAI API Key Input ======================
+st.title("📊 AI Trading Terminal")
+
+# ================= SIDEBAR =================
+
 with st.sidebar:
-    st.header("🔑 xAI API Key (for Grok)")
-    
-    # Try to get from secrets first (secure for deployed app)
-    if "xai_key" not in st.session_state:
-        st.session_state.xai_key = st.secrets.get("XAI_API_KEY", None)
-    
-    # If still not set → show input field
-    if st.session_state.xai_key is None or st.session_state.xai_key == "":
-        api_input = st.text_input(
-            "Paste your xAI API key here",
-            type="password",
-            placeholder="xai-...",
-            help="Get your key at https://console.x.ai → API Keys. This is only stored in your browser session."
-        )
-        
-        if api_input:
-            st.session_state.xai_key = api_input
-            st.success("Key saved for this session! ✓")
-            st.rerun()  # Refresh to hide input and show confirmation
+
+    st.header("🔑 API Key")
+
+    user_key = st.text_input("Enter xAI API Key", type="password")
+
+    try:
+        secret_key = st.secrets["XAI_API_KEY"]
+    except:
+        secret_key = None
+
+    xai_key = user_key if user_key else secret_key
+
+    st.divider()
+
+    st.header("Market Type")
+
+    market = st.selectbox(
+        "Select Market",
+        ["Crypto", "Forex", "Indices"]
+    )
+
+    st.divider()
+
+    st.header("Tools")
+
+    scan_crypto = st.button("🔎 Scan Crypto Gems")
+
+# ================= CRYPTO SCANNER =================
+
+if scan_crypto:
+
+    st.subheader("🚀 Crypto Opportunity Scanner")
+
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+
+    params = {
+        "vs_currency": "zar",
+        "order": "market_cap_desc",
+        "per_page": 100,
+        "page": 1
+    }
+
+    data = requests.get(url, params=params).json()
+
+    df = pd.DataFrame(data)[
+        [
+            "name",
+            "symbol",
+            "current_price",
+            "market_cap",
+            "price_change_percentage_24h"
+        ]
+    ]
+
+    df.columns = [
+        "Name",
+        "Symbol",
+        "Price (R)",
+        "Market Cap",
+        "24h Change %"
+    ]
+
+    st.dataframe(df, use_container_width=True)
+
+# ================= SYMBOL INPUT =================
+
+if market == "Crypto":
+
+    symbol = st.text_input("Crypto Symbol", "BTC")
+
+elif market == "Forex":
+
+    symbol = st.text_input("Forex Pair", "EURUSD")
+
+else:
+
+    symbol = st.text_input("Index", "US30")
+
+# ================= PRICE DATA =================
+
+def get_crypto_price(symbol):
+
+    url = "https://api.coingecko.com/api/v3/simple/price"
+
+    params = {
+        "ids": symbol.lower(),
+        "vs_currencies": "zar"
+    }
+
+    r = requests.get(url, params=params).json()
+
+    return r
+
+# ================= CHART =================
+
+st.subheader("📈 Market Chart")
+
+chart_symbol = symbol
+
+fig = go.Figure()
+
+fig.add_trace(
+    go.Scatter(
+        y=[1,2,3,2,4,5,4],
+        mode="lines",
+        name="Price"
+    )
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# ================= MARKET STRUCTURE =================
+
+st.subheader("📊 Smart Money Zones")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+
+    st.metric("Support", "Identifying")
+
+with col2:
+
+    st.metric("Resistance", "Identifying")
+
+with col3:
+
+    st.metric("Liquidity Pools", "Scanning")
+
+# ================= AI ANALYSIS =================
+
+if st.button("🤖 Run AI Market Analysis"):
+
+    if not xai_key:
+
+        st.error("Enter xAI API Key")
+
     else:
-        st.success("xAI API key is set ✓")
-        if st.button("Clear / Change key"):
-            st.session_state.xai_key = None
-            st.rerun()
-    
+
+        with st.spinner("Analyzing market structure..."):
+
+            client = OpenAI(
+                api_key=xai_key,
+                base_url="https://api.x.ai/v1"
+            )
+
+            prompt = f"""
+
+You are a professional institutional trader.
+
+Analyze the following market:
+
+Asset: {symbol}
+Market type: {market}
+
+Provide:
+
+1 Market structure
+2 Support and resistance
+3 Liquidity zones
+4 Order blocks
+5 Trend bias
+6 Likely manipulation areas
+7 Trade setup idea
+
+Return a structured response.
+
+"""
+
+            response = client.chat.completions.create(
+                model="grok-4-1-fast-reasoning",
+                messages=[
+                    {"role":"system","content":"You are a professional trader."},
+                    {"role":"user","content":prompt}
+                ]
+            )
+
+            st.subheader("🧠 AI Market Analysis")
+
+            st.markdown(response.choices[0].message.content)
+
+# ================= PRICE PROJECTIONS =================
+
+st.subheader("📉 AI Price Scenarios")
+
+scenario_df = pd.DataFrame({
+    "Scenario": ["Bear", "Base", "Bull"],
+    "Probability": [25,50,25]
+})
+
+st.bar_chart(scenario_df.set_index("Scenario"))
+
+# ================= DISCLAIMER =================
+
+st.caption("Educational use only. Not financial advice.")    
     st.caption("For security: Never share your key. On Streamlit Cloud, add it via Secrets instead of typing here.")
 
     st.header("ℹ️ About")
