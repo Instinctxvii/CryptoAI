@@ -39,31 +39,31 @@ with st.sidebar:
 symbol_default = "EURUSD" if market_type == "Forex" else "US30"
 symbol = st.text_input("Symbol", value=symbol_default)
 
-# Reliable fallback symbols for TradingView widget
+# Reliable public symbols for TradingView widget (avoids AAPL fallback)
 tv_fallback = "TVC:DJI" if market_type == "US30" else "FX:EURUSD"
-tv_default = tv_fallback if market_type == "US30" else f"FX:{symbol.upper()}"
+tv_default = tv_fallback  # force reliable default
 tv_symbol_input = st.text_input("TradingView Symbol", value=tv_default)
 
-# Use fallback if input looks invalid/empty
-tv_symbol = tv_symbol_input.strip() if tv_symbol_input.strip() else tv_fallback
+tv_symbol = tv_symbol_input.strip() or tv_fallback
 
 # ================= MAIN BUTTON =================
 if st.button("📡 Fetch Data & Run AI Trader Analysis", type="primary"):
-    with st.spinner("Fetching & analyzing..."):
+    with st.spinner("Fetching market data..."):
         yf_ticker = "^DJI" if market_type == "US30" else f"{symbol.upper()}=X"
 
         try:
             hist = yf.download(yf_ticker, period="7d", interval="15m", progress=False)
 
             if hist.empty or len(hist) < 20:
-                st.error(f"Not enough data for {yf_ticker}. Check symbol or try later.")
+                st.error(f"Insufficient data returned for {yf_ticker}. Try a different timeframe/symbol.")
             else:
                 current_price = hist['Close'].iloc[-1]
                 prec = 0 if market_type == "US30" else 4
                 current_price_display = round(current_price, prec)
 
-                recent_high  = hist['High'].rolling(40).max().iloc[-1]
-                recent_low   = hist['Low'].rolling(40).min().iloc[-1]
+                # Levels
+                recent_high = hist['High'].rolling(40).max().iloc[-1]
+                recent_low  = hist['Low'].rolling(40).min().iloc[-1]
                 atr = (hist['High'] - hist['Low']).rolling(14).mean().iloc[-1]
 
                 support_levels = sorted([
@@ -76,46 +76,46 @@ if st.button("📡 Fetch Data & Run AI Trader Analysis", type="primary"):
                 ])
                 liquidity_pool = round(recent_low - atr * 0.7, prec)
 
-                # Safer RSI calculation
+                # Safe RSI (no ambiguous truth value)
                 delta = hist['Close'].diff(1)
-                gain = delta.where(delta > 0, 0.0)
-                loss = -delta.where(delta < 0, 0.0)
+                gain = delta.clip(lower=0)
+                loss = -delta.clip(upper=0)
 
                 avg_gain = gain.rolling(window=14, min_periods=1).mean()
                 avg_loss = loss.rolling(window=14, min_periods=1).mean()
 
-                rs = avg_gain / avg_loss.where(avg_loss != 0, 1e-10)  # tiny value to avoid inf
-                rsi_series = 100.0 - (100.0 / (1.0 + rs))
+                rs = avg_gain / avg_loss.replace(0, 1e-10)  # prevent div-by-zero
+                rsi_series = 100 - (100 / (1 + rs))
 
-                rsi = rsi_series.iloc[-1] if len(rsi_series) > 0 and not pd.isna(rsi_series.iloc[-1]) else 50.0
+                rsi = rsi_series.iloc[-1] if not pd.isna(rsi_series.iloc[-1]) else 50.0
 
                 sma20 = hist['Close'].rolling(20, min_periods=1).mean().iloc[-1]
 
-                # Trading logic
+                # Bias & targets
                 if current_price > sma20 and rsi < 68:
                     bias = "Bullish"
                     entry = max(current_price, support_levels[1])
-                    sl    = round(min(support_levels[0], entry - atr * 1.3), prec)
-                    risk  = entry - sl
-                    tp1   = round(entry + risk * 1.0, prec)
-                    tp2   = round(entry + risk * rr_ratio, prec)
+                    sl = round(min(support_levels[0], entry - atr * 1.3), prec)
+                    risk = entry - sl
+                    tp1 = round(entry + risk * 1.0, prec)
+                    tp2 = round(entry + risk * rr_ratio, prec)
                     entry_text = f"**LONG** near **{entry:.{prec}f}**"
-                    pred_text  = f"Uptrend likely. TP1 **{tp1:.{prec}f}** • TP2 **{tp2:.{prec}f}**"
+                    pred_text = f"Uptrend likely. TP1 **{tp1:.{prec}f}** • TP2 **{tp2:.{prec}f}**"
 
                 elif current_price < sma20 and rsi > 32:
                     bias = "Bearish"
                     entry = min(current_price, resistance_levels[0])
-                    sl    = round(max(resistance_levels[1], entry + atr * 1.3), prec)
-                    risk  = sl - entry
-                    tp1   = round(entry - risk * 1.0, prec)
-                    tp2   = round(entry - risk * rr_ratio, prec)
+                    sl = round(max(resistance_levels[1], entry + atr * 1.3), prec)
+                    risk = sl - entry
+                    tp1 = round(entry - risk * 1.0, prec)
+                    tp2 = round(entry - risk * rr_ratio, prec)
                     entry_text = f"**SHORT** near **{entry:.{prec}f}**"
-                    pred_text  = f"Downtrend likely. TP1 **{tp1:.{prec}f}** • TP2 **{tp2:.{prec}f}**"
+                    pred_text = f"Downtrend likely. TP1 **{tp1:.{prec}f}** • TP2 **{tp2:.{prec}f}**"
 
                 else:
                     bias = "Neutral"
                     entry_text = "Wait for breakout"
-                    pred_text  = f"Range. Watch **{resistance_levels[1]:.{prec}f}** up or **{support_levels[0]:.{prec}f}** down"
+                    pred_text = f"Range-bound. Watch **{resistance_levels[1]:.{prec}f}** ↑ or **{support_levels[0]:.{prec}f}** ↓"
                     sl = tp1 = tp2 = None
 
                 st.session_state.update({
@@ -134,34 +134,35 @@ if st.button("📡 Fetch Data & Run AI Trader Analysis", type="primary"):
                     'yf_ticker': yf_ticker
                 })
 
-                st.success(f"Done — {yf_ticker} @ **{current_price_display}** • **{bias}**")
+                st.success(f"Analysis ready — {yf_ticker} @ **{current_price_display}** • **{bias}**")
 
         except Exception as e:
-            st.error(f"Fetch/analysis failed: {str(e)}\nTicker used: {yf_ticker}")
+            st.error(f"Fetch / analysis error: {str(e)}\nTicker: {yf_ticker}\nData rows: {len(hist) if 'hist' in locals() else 'no data'}")
 
-# ================= DISPLAY ANALYSIS =================
+# ================= ANALYSIS DISPLAY =================
 st.subheader("🧠 AI Trader Analysis")
 
 if st.session_state.analysis_done:
     st.markdown(f"""
-**Price**: **{st.session_state.current_price}**  
+**Current Price**: **{st.session_state.current_price}**  
 **Bias**: **{st.session_state.bias}**  
 
-**Support**: {st.session_state.support_levels}  
-**Resistance**: {st.session_state.resistance_levels}  
-**Liquidity ≈**: {st.session_state.liquidity_pool}
+**Support Levels**: {st.session_state.support_levels}  
+**Resistance Levels**: {st.session_state.resistance_levels}  
+**Liquidity Pool ≈**: {st.session_state.liquidity_pool}
 
-**Entry**: {st.session_state.entry_suggestion}  
-**SL**: {st.session_state.sl if st.session_state.sl is not None else "—"}  
+**Entry Suggestion**: {st.session_state.entry_suggestion}  
+**Stop Loss**: {st.session_state.sl if st.session_state.sl is not None else "—"}  
 **TP1 (1:1)**: {st.session_state.tp1 if st.session_state.tp1 is not None else "—"}  
 **TP2 ({rr_ratio}:1)**: {st.session_state.tp2 if st.session_state.tp2 is not None else "—"}
 
-**Outlook**: {st.session_state.prediction}
+**AI Outlook**:  
+{st.session_state.prediction}
     """)
 else:
-    st.info("Click the button to fetch live data and get analysis.")
+    st.info("Click the button above to fetch live data and run analysis.")
 
-# ================= TRADINGVIEW CHART – ALWAYS VISIBLE =================
+# ================= TRADINGVIEW CHART =================
 st.subheader("📈 TradingView Chart")
 
 symbol_clean = symbol.replace(" ", "").upper()
@@ -205,4 +206,4 @@ st.components.v1.html(f"""
 </div>
 """, height=620)
 
-st.caption("Tip: If chart shows AAPL → check/change the TradingView Symbol field above to a valid one like TVC:DJI or FX:EURUSD")
+st.caption("Tip: Use **TVC:DJI** or **FX:US30** in the TradingView Symbol field if the chart shows AAPL or fails to load.")
