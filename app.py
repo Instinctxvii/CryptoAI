@@ -3,6 +3,8 @@ import pandas as pd
 import requests
 import subprocess
 import sys
+from datetime import datetime
+import pytz
 
 # ================= AUTO-INSTALL BS4 =================
 try:
@@ -18,6 +20,15 @@ from openai import OpenAI
 # ================= PAGE CONFIG =================
 st.set_page_config(page_title="AI Trading Terminal", layout="wide")
 st.title("📊 AI Trading Terminal")
+
+# ================= DISPLAY NEW YORK OPEN IN LOCAL TIME =================
+ny_tz = pytz.timezone("America/New_York")
+local_tz = pytz.timezone("Africa/Johannesburg")  # change if your local TZ is different
+
+ny_open = ny_tz.localize(datetime.combine(datetime.today(), datetime.strptime("09:30", "%H:%M").time()))
+ny_open_local = ny_open.astimezone(local_tz)
+
+st.info(f"🕘 New York Open: 09:30 ET → {ny_open_local.strftime('%H:%M %p')} Local Time")
 
 # ================= SIDEBAR =================
 with st.sidebar:
@@ -93,9 +104,7 @@ symbol = st.text_input("Enter Symbol", symbol_default)
 # ================= TRADINGVIEW CHART =================
 st.subheader("📈 Market Chart (TradingView)")
 
-# ---- Normalize US30 input for TradingView ----
 symbol_clean = symbol.upper().replace(" ", "")
-# Mapping for popular symbols
 tv_symbol_map = {
     "BITCOIN": "COINBASE:BTCUSD",
     "ETHEREUM": "COINBASE:ETHUSD",
@@ -105,7 +114,6 @@ tv_symbol_map = {
 
 tv_symbol = tv_symbol_map.get(symbol_clean, "INDEX:US30")  # default to US30
 
-# ---- Render TradingView Widget ----
 st.components.v1.html(f"""
 <div class="tradingview-widget-container">
   <div id="tradingview_{symbol_clean}"></div>
@@ -153,7 +161,7 @@ You are a professional institutional trader.
 
 Analyze the market: {symbol} ({market_type}).
 
-Predict likely market movement by the **start of the New York session** today.
+Predict likely market movement by the **start of the New York session ({ny_open_local.strftime('%H:%M %p')} local time)** today.
 
 """
         if market_type == "US30" and headlines:
