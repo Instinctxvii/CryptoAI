@@ -7,13 +7,13 @@ from datetime import datetime
 
 st.set_page_config(page_title="US30 Trader Demo", layout="wide")
 st.title("US30 / Dow Jones Trader Demo")
-st.caption("Rule-based – no API keys – manual TradingView price override supported")
+st.caption("Rule-based – no API keys – manual TradingView price override")
 
 st.info("""
-**How to get 1:1 match with chart price**  
-1. Look at the current price shown in the TradingView chart above  
+**How to get exact match with chart price**  
+1. Look at the current price on the TradingView chart above  
 2. Paste it into the field below  
-3. Click "Analyze" → entry/SL/TP will be calculated using **your pasted price**
+3. Click "Analyze" → entry / SL / TP will be calculated using **that price**
 """)
 
 # Session state
@@ -25,7 +25,7 @@ with st.sidebar:
     st.header("Settings")
     rr = st.slider("Risk:Reward for TP2", 1.5, 4.0, 2.5, 0.5)
 
-# TradingView chart
+# TradingView chart – loads immediately
 st.subheader("📈 US30 Live Chart")
 
 tv_symbol = st.text_input("TradingView Symbol", "CAPITALCOM:US30")
@@ -52,28 +52,26 @@ st.components.v1.html(f"""
 </div>
 """, height=620)
 
-# Manual override field
+# Manual TradingView price input – default is realistic for US30
 tv_price = st.number_input(
-    "Paste CURRENT price from TradingView chart here (required for 1:1 match)",
+    "Paste CURRENT price from TradingView chart here",
     min_value=40000.0,
     max_value=60000.0,
     step=0.1,
     format="%.1f",
-    value=0.0,
+    value=48300.0,  # ← this prevents the min_value error on first load
     help="Copy the live price from the chart above. Analysis will use THIS value."
 )
 
-use_tv_price = tv_price > 45000  # basic sanity check
-
 # Analyze button
 if st.button("Analyze Current Structure", type="primary"):
-    if not use_tv_price:
-        st.warning("Please paste a valid price from the TradingView chart first")
+    if tv_price <= 40000:
+        st.warning("Please paste a realistic US30 price from the chart (above 40,000)")
         st.stop()
 
     with st.spinner("Calculating using pasted TradingView price..."):
         try:
-            # Fetch structure data from ^DJI (for SMA/ATR/support/resistance)
+            # Fetch structure from ^DJI (SMA, ATR, support/resistance)
             df = yf.download("^DJI", period="5d", interval="15m", progress=False)
 
             if df.empty or len(df) < 20:
@@ -82,7 +80,6 @@ if st.button("Analyze Current Structure", type="primary"):
 
             df = df[['Close', 'High', 'Low']].astype(float)
 
-            # Structure scalars from ^DJI
             high_40 = float(df['High'].rolling(40).max().iloc[-1])
             low_40  = float(df['Low'].rolling(40).min().iloc[-1])
             atr     = float((df['High'] - df['Low']).rolling(14).mean().iloc[-1])
@@ -92,7 +89,7 @@ if st.button("Analyze Current Structure", type="primary"):
             resistance  = [round(high_40 - atr * 0.6), round(high_40)]
             liquidity   = round(low_40 - atr * 0.8)
 
-            # Use user-pasted TradingView price for decision & levels
+            # Use the pasted TradingView price for all decisions
             price = tv_price
             price_r = round(price)
 
@@ -137,16 +134,16 @@ if st.button("Analyze Current Structure", type="primary"):
             st.success("Analysis complete – using your pasted price")
 
         except Exception as e:
-            st.error(f"Error during calculation: {str(e)}")
+            st.error(f"Calculation failed: {str(e)}")
 
-# Show results
+# Display results
 if st.session_state.analysis:
     a = st.session_state.analysis
 
-    st.subheader("Current Analysis")
+    st.subheader("Current Analysis (using pasted TradingView price)")
 
     st.markdown(f"""
-**Price (pasted from TradingView)** ≈ **{a['price']}**
+**Price (pasted)** ≈ **{a['price']}**
 
 **Bias** → **{a['bias']}**
 
@@ -164,7 +161,7 @@ if st.session_state.analysis:
 {a['reason']}
     """)
 
-    # Plotly overlay using pasted price
+    # Plotly with pasted price
     st.subheader("Levels overlay (using pasted price)")
     cp = a['price']
     fig = go.Figure()
@@ -192,6 +189,6 @@ if st.session_state.analysis:
     st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("Paste price from chart → press Analyze")
+    st.info("Paste price from chart above → press Analyze")
 
 st.caption("Demo only – rule-based only – not financial advice")
