@@ -5,17 +5,15 @@ import json
 import yfinance as yf
 from datetime import datetime
 
-# Page config
 st.set_page_config(page_title="US30 Trader Demo", layout="wide")
 st.title("US30 / Dow Jones Trader Demo")
-st.caption("Rule-based demo – no API keys")
+st.caption("Rule-based – no API keys – manual TradingView price override supported")
 
 st.info("""
-**Why prices may differ slightly**  
-Analysis uses Yahoo Finance ^DJI (official index).  
-TradingView shows broker CFD price (e.g. CAPITALCOM:US30).  
-Normal difference: 10–100 points.  
-Paste the live price from the chart below to recalculate using that price.
+**How to get 1:1 match with chart price**  
+1. Look at the current price shown in the TradingView chart above  
+2. Paste it into the field below  
+3. Click "Analyze" → entry/SL/TP will be calculated using **your pasted price**
 """)
 
 # Session state
@@ -28,7 +26,7 @@ with st.sidebar:
     rr = st.slider("Risk:Reward for TP2", 1.5, 4.0, 2.5, 0.5)
 
 # TradingView chart
-st.subheader("📈 US30 Live Chart (Broker CFD)")
+st.subheader("📈 US30 Live Chart")
 
 tv_symbol = st.text_input("TradingView Symbol", "CAPITALCOM:US30")
 
@@ -54,59 +52,62 @@ st.components.v1.html(f"""
 </div>
 """, height=620)
 
-# Manual price input to match TradingView
-tv_price_input = st.number_input(
-    "Paste current LIVE price from TradingView chart (optional)",
-    min_value=0.0,
+# Manual override field
+tv_price = st.number_input(
+    "Paste CURRENT price from TradingView chart here (required for 1:1 match)",
+    min_value=40000.0,
+    max_value=60000.0,
     step=0.1,
     format="%.1f",
     value=0.0,
-    help="Copy the current price shown on the chart to recalculate entry/SL/TP using that price"
+    help="Copy the live price from the chart above. Analysis will use THIS value."
 )
+
+use_tv_price = tv_price > 45000  # basic sanity check
 
 # Analyze button
 if st.button("Analyze Current Structure", type="primary"):
-    with st.spinner("Fetching data from Yahoo Finance (^DJI)..."):
+    if not use_tv_price:
+        st.warning("Please paste a valid price from the TradingView chart first")
+        st.stop()
+
+    with st.spinner("Calculating using pasted TradingView price..."):
         try:
+            # Fetch structure data from ^DJI (for SMA/ATR/support/resistance)
             df = yf.download("^DJI", period="5d", interval="15m", progress=False)
 
             if df.empty or len(df) < 20:
-                st.error("Not enough recent data from Yahoo Finance")
+                st.error("Could not fetch structure data from Yahoo Finance")
                 st.stop()
 
             df = df[['Close', 'High', 'Low']].astype(float)
 
-            # Base price from yfinance
-            yf_price = float(df['Close'].iloc[-1])
-            price_r = round(yf_price)
-
-            # If user pasted TradingView price → use that instead
-            use_price = tv_price_input if tv_price_input > 1000 else yf_price
-            use_price_r = round(use_price)
-
+            # Structure scalars from ^DJI
             high_40 = float(df['High'].rolling(40).max().iloc[-1])
             low_40  = float(df['Low'].rolling(40).min().iloc[-1])
-
-            atr = float((df['High'] - df['Low']).rolling(14).mean().iloc[-1])
-
-            sma20 = float(df['Close'].rolling(20).mean().iloc[-1])
+            atr     = float((df['High'] - df['Low']).rolling(14).mean().iloc[-1])
+            sma20   = float(df['Close'].rolling(20).mean().iloc[-1])
 
             support     = [round(low_40), round(low_40 + atr * 0.6)]
             resistance  = [round(high_40 - atr * 0.6), round(high_40)]
             liquidity   = round(low_40 - atr * 0.8)
 
-            if use_price > sma20 + atr * 0.4:
+            # Use user-pasted TradingView price for decision & levels
+            price = tv_price
+            price_r = round(price)
+
+            if price > sma20 + atr * 0.4:
                 bias = "Bullish"
-                entry_point = round(use_price - atr * 0.4)
+                entry_point = round(price - atr * 0.4)
                 entry_text = f"Enter long at ≈ **{entry_point}** (±10 points)"
                 sl   = min(support) - int(atr * 0.4)
                 risk = entry_point - sl
                 tp1  = round(entry_point + risk)
                 tp2  = round(entry_point + risk * rr)
 
-            elif use_price < sma20 - atr * 0.4:
+            elif price < sma20 - atr * 0.4:
                 bias = "Bearish"
-                entry_point = round(use_price + atr * 0.4)
+                entry_point = round(price + atr * 0.4)
                 entry_text = f"Enter short at ≈ **{entry_point}** (±10 points)"
                 sl   = max(resistance) + int(atr * 0.4)
                 risk = sl - entry_point
@@ -118,10 +119,10 @@ if st.button("Analyze Current Structure", type="primary"):
                 entry_text = f"No clear entry. Watch break above {resistance[1]} or below {support[0]}"
                 sl = tp1 = tp2 = None
 
-            reason = f"Using price {use_price_r} (TradingView if pasted, else Yahoo ^DJI). SMA20 ≈ {round(sma20)}. ATR ≈ {round(atr)}."
+            reason = f"Using pasted TradingView price {price_r}. SMA20 ≈ {round(sma20)}. ATR ≈ {round(atr)}."
 
             st.session_state.analysis = {
-                'price': use_price_r,
+                'price': price_r,
                 'bias': bias,
                 'entry': entry_text,
                 'sl': sl,
@@ -130,23 +131,22 @@ if st.button("Analyze Current Structure", type="primary"):
                 'support': support,
                 'resistance': resistance,
                 'liquidity': liquidity,
-                'reason': reason,
-                'source_note': "TradingView price" if tv_price_input > 1000 else "Yahoo ^DJI"
+                'reason': reason
             }
 
-            st.success("Analysis complete")
+            st.success("Analysis complete – using your pasted price")
 
         except Exception as e:
-            st.error(f"Error: {str(e)}")
+            st.error(f"Error during calculation: {str(e)}")
 
 # Show results
 if st.session_state.analysis:
     a = st.session_state.analysis
 
-    st.subheader(f"Current Analysis ({a['source_note']})")
+    st.subheader("Current Analysis")
 
     st.markdown(f"""
-**Price used** ≈ **{a['price']}**
+**Price (pasted from TradingView)** ≈ **{a['price']}**
 
 **Bias** → **{a['bias']}**
 
@@ -164,8 +164,8 @@ if st.session_state.analysis:
 {a['reason']}
     """)
 
-    # Plotly
-    st.subheader("Levels overlay (using analysis price)")
+    # Plotly overlay using pasted price
+    st.subheader("Levels overlay (using pasted price)")
     cp = a['price']
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -192,6 +192,6 @@ if st.session_state.analysis:
     st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("Press the button to analyze")
+    st.info("Paste price from chart → press Analyze")
 
 st.caption("Demo only – rule-based only – not financial advice")
